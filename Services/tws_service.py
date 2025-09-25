@@ -1,130 +1,182 @@
-import logging
+# Services/tws_service.py
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
 from ibapi.order import Order
-from ibapi.common import TickerId
 import threading
 import time
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-
-class IBWrapper(EWrapper):
+class TWSService(EWrapper, EClient):
     def __init__(self):
-        super().__init__()
+        EClient.__init__(self, self)
+        self.nextOrderId = None
+        self.symbol_samples = {}
+        self.contract_details = {}
 
-    def nextValidId(self, orderId: int):
-        logging.info(f"[IB] NextValidId = {orderId}")
-        self.nextOrderId = orderId
-
-    def error(self, reqId: TickerId, errorCode: int, errorString: str):
-        logging.error(f"[Error] reqId={reqId}, code={errorCode}, msg={errorString}")
-
-    def orderStatus(
-        self,
-        orderId: Order,
-        status: str,
-        filled: float,
-        remaining: float,
-        avgFillPrice: float,
-        permId: int = 0,
-        parentId: int = 0,
-        lastFillPrice: float = 0.0,
-        clientId: int = 0,
-        whyHeld: str = "",
-        mktCapPrice: float = 0.0,
-    ):
-        logging.info(
-            f"[OrderStatus] id={orderId}, status={status}, filled={filled}, remaining={remaining}, avgFillPrice={avgFillPrice}"
-        )
-
-    def openOrder(self, orderId: Order, contract: Contract, order: Order, orderState):
-        logging.info(
-            f"[OpenOrder] id={orderId}, {contract.symbol} {contract.secType} {contract.lastTradeDateOrContractMonth} {contract.strike}{contract.right} "
-            f"orderType={order.orderType}, action={order.action}, qty={order.totalQuantity}"
-        )
-
-
-class IBClient(EClient):
-    def __init__(self, wrapper):
-        EClient.__init__(self, wrapper)
-
-
-class TWSService:
-    def __init__(self, host="127.0.0.1", port=7497, client_id=1):
-        self.wrapper = IBWrapper()
-        self.client = IBClient(self.wrapper)
-        self.client.connect(host, port, client_id)
-
-        # Start the network thread
-        self.thread = threading.Thread(target=self.client.run, daemon=True)
-        self.thread.start()
-
-        # Wait a moment to ensure connection
+    # --- Connection / Lifecycle ---
+    def connect_and_run(self, host="127.0.0.1", port=7497, client_id=1):
+        self.connect(host, port, client_id)
+        thread = threading.Thread(target=self.run, daemon=True)
+        thread.start()
         time.sleep(1)
 
-    def place_bracket_order(
-        self,
-        symbol,
-        expiry,
-        strike,
-        right,
-        action,
-        quantity,
-        entry_price,
-        take_profit_price,
-        stop_loss_price,
-    ):
-        contract = Contract()
-        contract.symbol = symbol
-        contract.secType = "OPT"
-        contract.exchange = "SMART"
-        contract.currency = "USD"
-        contract.lastTradeDateOrContractMonth = expiry
-        contract.strike = strike
-        contract.right = right
+    def nextValidId(self, orderId: int):
+        self.nextOrderId = orderId
 
-        # Parent order (entry)
-        parent = Order()
-        parent.orderId = self.wrapper.nextOrderId
-        parent.action = action
-        parent.orderType = "LMT"
-        parent.totalQuantity = quantity
-        parent.lmtPrice = entry_price
-        parent.transmit = False
+    def error(self, reqId, errorCode, errorString):
+        # suppress IB spam (only show real errors)
+        if errorCode < 2000:
+            print(f"[Error] reqId={reqId}, code={errorCode}, msg={errorString}")
 
-        # Take profit
-        take_profit = Order()
-        take_profit.orderId = parent.orderId + 1
-        take_profit.action = "SELL" if action == "BUY" else "BUY"
-        take_profit.orderType = "LMT"
-        take_profit.totalQuantity = quantity
-        take_profit.lmtPrice = take_profit_price
-        take_profit.parentId = parent.orderId
-        take_profit.transmit = False
+    # --- Symbol Search ---
+    def symbolSamples(self, reqId, contractDescriptions):
+        results = []
+        for desc in contractDescriptions:
+            c = desc.contract
+            results.append({
+                "symbol": c.symbol,
+                "secType": c.secType,
+                "currency": c.currency,
+                "exchange": c.exchange,
+                "primaryExchange": c.primaryExchange,
+                "description": desc.derivativeSecTypes
+            })
+        self.symbol_samples[reqId] = results
 
-        # Stop loss
-        stop_loss = Order()
-        stop_loss.orderId = parent.orderId + 2
-        stop_loss.action = "SELL" if action == "BUY" else "BUY"
-        stop_loss.orderType = "STP"
-        stop_loss.totalQuantity = quantity
-        stop_loss.auxPrice = stop_loss_price
-        stop_loss.parentId = parent.orderId
-        stop_loss.transmit = True
+    def search_symbol(self, name: str, reqId: int = 9001):
+        self.reqMatchingSymbols(reqId, name)
+        time.sleep(2)
+        return self.symbol_samples.get(reqId, [])
 
-        self.client.placeOrder(parent.orderId, contract, parent)
-        logging.info(f"Placed parent option order id={parent.orderId}")
-        self.client.placeOrder(take_profit.orderId, contract, take_profit)
-        logging.info(f"Placed takeProfit order id={take_profit.orderId}")
-        self.client.placeOrder(stop_loss.orderId, contract, stop_loss)
-        logging.info(f"Placed stopLoss order id={stop_loss.orderId}")
+    # --- Option Chain Fetch ---
+    def contractDetails(self, reqId, contractDetails):
+        cd = contractDetails.contract
+        if reqId not in self.contract_details:
+            self.contract_details[reqId] = []
+        self.contract_details[reqId].append({
+            "symbol": cd.symbol,
+            "expiry": cd.lastTradeDateOrContractMonth,
+            "strike": cd.strike,
+            "right": cd.right,
+            "exchange": cd.exchange,
+            "currency": cd.currency
+        })
 
-        self.wrapper.nextOrderId += 3
+    def get_option_chain(self, symbol: str, reqId: int = 9101, expiry: str = None):
+        c = Contract()
+        c.symbol = symbol
+        c.secType = "OPT"
+        c.exchange = "SMART"
+        c.currency = "USD"
+        if expiry:
+            c.lastTradeDateOrContractMonth = expiry
+        self.reqContractDetails(reqId, c)
+        time.sleep(2)
+        return self.contract_details.get(reqId, [])
+
+    # --- Contract Builders ---
+    def option_contract(self, symbol, expiry, strike, right, exchange="SMART", currency="USD"):
+        c = Contract()
+        c.symbol = symbol
+        c.secType = "OPT"
+        c.exchange = exchange
+        c.currency = currency
+        c.lastTradeDateOrContractMonth = expiry
+        c.strike = float(strike)
+        c.right = right
+        c.multiplier = "100"
+        return c
+
+    # --- Order Builder ---
+    def create_order(self, action, quantity, order_type="MKT",
+                     limit_price=None, stop_price=None,
+                     parent_id=None, transmit=True):
+        o = Order()
+        o.action = action
+        o.totalQuantity = quantity
+        o.orderType = order_type
+        if order_type == "LMT" and limit_price is not None:
+            o.lmtPrice = limit_price
+        if order_type == "STP" and stop_price is not None:
+            o.auxPrice = stop_price
+        if parent_id is not None:
+            o.parentId = parent_id
+        o.transmit = transmit
+        o.eTradeOnly = False
+        o.firmQuoteOnly = False
+        return o
+
+    # --- Place Bracket Order (Options) ---
+    def place_bracket_order(self, symbol, expiry, strike, right,
+                            action, quantity, entry_price,
+                            take_profit_price, stop_loss_price):
+        if self.nextOrderId is None:
+            raise Exception("NextValidId not received, call connect_and_run() first")
+
+        parent_id = self.nextOrderId
+        self.nextOrderId += 1
+
+        contract = self.option_contract(symbol, expiry, strike, right)
+
+        parent = self.create_order(action, quantity, "LMT",
+                                   limit_price=entry_price,
+                                   transmit=False)
+        parent.orderId = parent_id
+
+        tp = self.create_order("SELL" if action == "BUY" else "BUY",
+                               quantity, "LMT",
+                               limit_price=take_profit_price,
+                               parent_id=parent_id,
+                               transmit=False)
+        tp.orderId = self.nextOrderId
+        self.nextOrderId += 1
+
+        sl = self.create_order("SELL" if action == "BUY" else "BUY",
+                               quantity, "STP",
+                               stop_price=stop_loss_price,
+                               parent_id=parent_id,
+                               transmit=True)
+        sl.orderId = self.nextOrderId
+        self.nextOrderId += 1
+
+        self.placeOrder(parent.orderId, contract, parent)
+        self.placeOrder(tp.orderId, contract, tp)
+        self.placeOrder(sl.orderId, contract, sl)
 
         return {
-            "parentId": parent.orderId,
-            "takeProfitId": take_profit.orderId,
-            "stopLossId": stop_loss.orderId,
+            "parent": parent.orderId,
+            "take_profit": tp.orderId,
+            "stop_loss": sl.orderId
         }
+
+
+# --- Example CLI Run ---
+if __name__ == "__main__":
+    tws = TWSService()
+    tws.connect_and_run()
+
+    # 1. Symbol search
+    syms = tws.search_symbol("TSLA")
+    print("Search result:", syms[:3])  # first 3 matches
+
+    # 2. Option chain fetch
+    chain = tws.get_option_chain("TSLA", expiry="20250926")
+    print("Chain sample:", chain[:3])
+
+    # 3. Place example order
+    if chain:
+        order_ids = tws.place_bracket_order(
+            symbol="TSLA",
+            expiry=chain[0]["expiry"],
+            strike=chain[0]["strike"],
+            right=chain[0]["right"],
+            action="BUY",
+            quantity=1,
+            entry_price=5.0,
+            take_profit_price=7.0,
+            stop_loss_price=4.0
+        )
+        print("Placed bracket:", order_ids)
+
+    time.sleep(5)
