@@ -1,67 +1,130 @@
-from Services import polygon_service, tws_service
+import logging
+from ibapi.client import EClient
+from ibapi.wrapper import EWrapper
+from ibapi.contract import Contract
+from ibapi.order import Order
+from ibapi.common import TickerId
+import threading
+import time
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
-class AppModel:
+class IBWrapper(EWrapper):
     def __init__(self):
-        self.symbol = None
-        self.price = None
-        self.stop_loss = None
-        self.take_profit = None
-        self.expiry = None
-        self.strike = None
-        self.right = None
-        self.orders = []
+        super().__init__()
 
-        self.tws = tws_service.TWSService()
-        self.polygon = polygon_service.PolygonService()
+    def nextValidId(self, orderId: int):
+        logging.info(f"[IB] NextValidId = {orderId}")
+        self.nextOrderId = orderId
 
-    def set_symbol(self, symbol: str):
-        """Sembolü seç ve son fiyatı güncelle."""
-        self.symbol = symbol.upper()
-        self.price = self.polygon.get_last_trade(self.symbol)
-        return self.price
+    def error(self, reqId: TickerId, errorCode: int, errorString: str):
+        logging.error(f"[Error] reqId={reqId}, code={errorCode}, msg={errorString}")
 
-    def set_risk(self, stop_loss: float, take_profit: float):
-        """Risk parametrelerini ayarla."""
-        self.stop_loss = stop_loss
-        self.take_profit = take_profit
-        return self.stop_loss, self.take_profit
-
-    def set_option(self, expiry: str, strike: float, right: str):
-        """Opsiyon kontrat detaylarını ayarla (örn. 20250926, 430.0, 'C')."""
-        self.expiry = expiry
-        self.strike = strike
-        self.right = right.upper()
-        return self.expiry, self.strike, self.right
-
-    def place_order(self, action="BUY", quantity=1):
-        """Bracket order gönder ve model state’ine ekle."""
-        if not all([self.symbol, self.price, self.expiry, self.strike, self.right]):
-            raise ValueError("Symbol, option params, or price not set")
-
-        order = self.tws.place_bracket_order(
-            symbol=self.symbol,
-            expiry=self.expiry,
-            strike=self.strike,
-            right=self.right,
-            action=action,
-            quantity=quantity,
-            entry_price=self.price,
-            take_profit_price=self.take_profit,
-            stop_loss_price=self.stop_loss
+    def orderStatus(
+        self,
+        orderId: Order,
+        status: str,
+        filled: float,
+        remaining: float,
+        avgFillPrice: float,
+        permId: int = 0,
+        parentId: int = 0,
+        lastFillPrice: float = 0.0,
+        clientId: int = 0,
+        whyHeld: str = "",
+        mktCapPrice: float = 0.0,
+    ):
+        logging.info(
+            f"[OrderStatus] id={orderId}, status={status}, filled={filled}, remaining={remaining}, avgFillPrice={avgFillPrice}"
         )
-        self.orders.append(order)
-        return order
 
-    def get_state(self):
-        """Şu anki app state’i döndür."""
+    def openOrder(self, orderId: Order, contract: Contract, order: Order, orderState):
+        logging.info(
+            f"[OpenOrder] id={orderId}, {contract.symbol} {contract.secType} {contract.lastTradeDateOrContractMonth} {contract.strike}{contract.right} "
+            f"orderType={order.orderType}, action={order.action}, qty={order.totalQuantity}"
+        )
+
+
+class IBClient(EClient):
+    def __init__(self, wrapper):
+        EClient.__init__(self, wrapper)
+
+
+class TWSService:
+    def __init__(self, host="127.0.0.1", port=7497, client_id=1):
+        self.wrapper = IBWrapper()
+        self.client = IBClient(self.wrapper)
+        self.client.connect(host, port, client_id)
+
+        # Start the network thread
+        self.thread = threading.Thread(target=self.client.run, daemon=True)
+        self.thread.start()
+
+        # Wait a moment to ensure connection
+        time.sleep(1)
+
+    def place_bracket_order(
+        self,
+        symbol,
+        expiry,
+        strike,
+        right,
+        action,
+        quantity,
+        entry_price,
+        take_profit_price,
+        stop_loss_price,
+    ):
+        contract = Contract()
+        contract.symbol = symbol
+        contract.secType = "OPT"
+        contract.exchange = "SMART"
+        contract.currency = "USD"
+        contract.lastTradeDateOrContractMonth = expiry
+        contract.strike = strike
+        contract.right = right
+
+        # Parent order (entry)
+        parent = Order()
+        parent.orderId = self.wrapper.nextOrderId
+        parent.action = action
+        parent.orderType = "LMT"
+        parent.totalQuantity = quantity
+        parent.lmtPrice = entry_price
+        parent.transmit = False
+
+        # Take profit
+        take_profit = Order()
+        take_profit.orderId = parent.orderId + 1
+        take_profit.action = "SELL" if action == "BUY" else "BUY"
+        take_profit.orderType = "LMT"
+        take_profit.totalQuantity = quantity
+        take_profit.lmtPrice = take_profit_price
+        take_profit.parentId = parent.orderId
+        take_profit.transmit = False
+
+        # Stop loss
+        stop_loss = Order()
+        stop_loss.orderId = parent.orderId + 2
+        stop_loss.action = "SELL" if action == "BUY" else "BUY"
+        stop_loss.orderType = "STP"
+        stop_loss.totalQuantity = quantity
+        stop_loss.auxPrice = stop_loss_price
+        stop_loss.parentId = parent.orderId
+        stop_loss.transmit = True
+
+        self.client.placeOrder(parent.orderId, contract, parent)
+        logging.info(f"Placed parent option order id={parent.orderId}")
+        self.client.placeOrder(take_profit.orderId, contract, take_profit)
+        logging.info(f"Placed takeProfit order id={take_profit.orderId}")
+        self.client.placeOrder(stop_loss.orderId, contract, stop_loss)
+        logging.info(f"Placed stopLoss order id={stop_loss.orderId}")
+
+        self.wrapper.nextOrderId += 3
+
         return {
-            "symbol": self.symbol,
-            "price": self.price,
-            "stop_loss": self.stop_loss,
-            "take_profit": self.take_profit,
-            "expiry": self.expiry,
-            "strike": self.strike,
-            "right": self.right,
-            "orders": self.orders,
+            "parentId": parent.orderId,
+            "takeProfitId": take_profit.orderId,
+            "stopLossId": stop_loss.orderId,
         }
