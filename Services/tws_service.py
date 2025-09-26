@@ -5,7 +5,7 @@ from ibapi.contract import Contract
 from ibapi.order import Order
 import threading
 import time
-
+import random
 
 class TWSService(EWrapper, EClient):
     def __init__(self):
@@ -16,7 +16,9 @@ class TWSService(EWrapper, EClient):
 
     # --- Connection / Lifecycle ---
     def connect_and_run(self, host="127.0.0.1", port=7497, client_id=1):
-        self.connect(host, port, client_id)
+
+        id = random.randint(1, 10000)
+        self.connect(host, port, id)
         thread = threading.Thread(target=self.run, daemon=True)
         thread.start()
         time.sleep(1)

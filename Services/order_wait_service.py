@@ -21,7 +21,8 @@ class OrderWaitService:
         self.pending_orders = {}
         self.cancelled_orders = set()
         self.lock = threading.Lock()
-
+        self.queue_cond = threading.Condition()
+        self.order_queue = []
         # worker thread havuzu
         self.threads = []
         for i in range(max_workers):
@@ -30,8 +31,8 @@ class OrderWaitService:
             self.threads.append(t)
 
         # ortak queue (threadler buradan iş alır)
-        self.order_queue = []
-        self.queue_cond = threading.Condition()
+
+        #self.queue_cond = threading.Condition()    retard u run worker loop before defining que condition
 
     def add_order(self, order_data: dict) -> str:
         """
