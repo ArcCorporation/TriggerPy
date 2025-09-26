@@ -3,7 +3,7 @@ from tkinter import ttk
 from model import AppModel
 from view import Banner, OrderFrame
 from Helpers.debugger import DebugFrame   # yeni eklendi
-
+import Helpers.printer as p
 
 class ArcTriggerApp(tk.Tk):
     def __init__(self):
@@ -73,6 +73,7 @@ class ArcTriggerApp(tk.Tk):
             self.debug_frame = DebugFrame(self)
             self.debug_frame.pack(fill="both", expand=True, padx=10, pady=10)
             self.debug_frame.add_text("[INFO] Debug console started")
+            p.set_p(self.debug_frame.add_text)
             self.btn_debug.config(text="Hide Debug")
 
 
