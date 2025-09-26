@@ -13,3 +13,49 @@ Services/__pycache__/polygon_service.cpython-313.pyc
 __pycache__/view.cpython-313.pyc
 __pycache__/view.cpython-313.pyc
 Services/__pycache__/polygon_service.cpython-313.pyc
+# ======================================
+# Python cache / compiled files
+# ======================================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+*.pyd
+*.dll
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+*.env
+*.venv
+
+# ======================================
+# PyInstaller build artifacts
+# ======================================
+# Distribution folder
+/dist/
+build/
+# PyInstaller spec file (optional to ignore if auto-generated)
+*.spec
+
+# PyInstaller logs
+*.manifest
+*.trace
+*.log
+
+# Temporary EXEs and bundles
+*.exe
+*.app
+*.pkg
+*.dmg
+*.msi
+
+# If you use --onedir, ignore the unpacked folders
+*_pyi.*
+
+# ======================
