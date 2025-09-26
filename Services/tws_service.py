@@ -26,7 +26,7 @@ class TWSService(EWrapper, EClient):
     def nextValidId(self, orderId: int):
         self.nextOrderId = orderId
 
-    def error(self, reqId, errorCode, errorString):
+    def error(self, reqId, errorCode, errorString,x,y):
         # suppress IB spam (only show real errors)
         if errorCode < 2000:
             print(f"[Error] reqId={reqId}, code={errorCode}, msg={errorString}")
