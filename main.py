@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk
 from model import AppModel
 from view import Banner, OrderFrame
+from debugger import DebugFrame   # yeni eklendi
 
 
 class ArcTriggerApp(tk.Tk):
@@ -17,7 +18,7 @@ class ArcTriggerApp(tk.Tk):
         banner = Banner(self)
         banner.pack(fill="x")
 
-        # Üst kontrol paneli (Order Count + Start Trigger)
+        # Üst kontrol paneli (Order Count + Start Trigger + Debug)
         top_frame = ttk.Frame(self)
         top_frame.pack(fill="x", pady=10)
 
@@ -31,12 +32,18 @@ class ArcTriggerApp(tk.Tk):
         start_btn = tk.Button(top_frame, text="Start Trigger", bg="red", fg="white", command=self.build_order_frames)
         start_btn.pack(side="left", padx=10)
 
+        self.btn_debug = tk.Button(top_frame, text="Show Debug", command=self.toggle_debug)
+        self.btn_debug.pack(side="left", padx=10)
+
         # Order frame container
         self.order_container = ttk.Frame(self)
         self.order_container.pack(fill="both", expand=True)
 
         # Frame referansları
         self.order_frames = []
+
+        # Debug frame (başta None)
+        self.debug_frame = None
 
     def build_order_frames(self):
         """Spinbox değerine göre order frame’leri oluştur."""
@@ -55,6 +62,18 @@ class ArcTriggerApp(tk.Tk):
             frame = OrderFrame(self.order_container, self.model, order_id=i + 1)
             frame.pack(fill="x", pady=10, padx=10)
             self.order_frames.append(frame)
+
+    def toggle_debug(self):
+        """Debug konsolu aç/kapat."""
+        if self.debug_frame and self.debug_frame.winfo_exists():
+            self.debug_frame.destroy()
+            self.debug_frame = None
+            self.btn_debug.config(text="Show Debug")
+        else:
+            self.debug_frame = DebugFrame(self)
+            self.debug_frame.pack(fill="both", expand=True, padx=10, pady=10)
+            self.debug_frame.add_text("[INFO] Debug console started")
+            self.btn_debug.config(text="Hide Debug")
 
 
 if __name__ == "__main__":
