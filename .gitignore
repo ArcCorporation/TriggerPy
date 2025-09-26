@@ -62,3 +62,4 @@ build/
 Services/__pycache__/tws_service.cpython-313.pyc
 .vscode/settings.json
 Services/__pycache__/tws_service.cpython-313.pyc
+Services/__pycache__/order_wait_service.cpython-313.pyc
