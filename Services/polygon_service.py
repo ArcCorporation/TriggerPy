@@ -4,8 +4,8 @@ import json
 import threading
 import time
 import websocket
-from enigma3 import Enigma3Service
-from randomness import KEY
+from Services.enigma3 import  Enigma3Service
+from Services.randomness import  KEY
 
 
 class PolygonService:

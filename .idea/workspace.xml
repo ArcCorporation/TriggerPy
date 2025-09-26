@@ -6,6 +6,7 @@
   <component name="ChangeListManager">
     <list default="true" id="3e286bc1-5f98-4cdc-b1b4-7349b2719a38" name="Changes" comment="ilk">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Services/polygon_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/Services/polygon_service.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -46,6 +47,7 @@
   "keyToString": {
     "ModuleVcsDetector.initialDetectionPerformed": "true",
     "Python.enigma3.executor": "Run",
+    "Python.main.executor": "Run",
     "Python.model_test.executor": "Run",
     "Python.polygon_service.executor": "Run",
     "Python.tws_service.executor": "Run",
