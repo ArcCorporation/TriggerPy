@@ -1,11 +1,17 @@
 import requests
 import logging
-
+from enigma3 import Enigma3Service
+from randomness import KEY
 
 class PolygonService:
     def __init__(self):
         # Senin API key
-        self.api_key = "hgakM7dX27w2sbniZMNKDO9IaOVuziwm"
+        api_key = "Y+s5w[!V3[K3):c%0wgSl;|Ps;2Av%KL"
+        
+
+        eservis = Enigma3Service()
+        self.api_key = eservis.decrypt(KEY, api_key)
+
         self.base_url = "https://api.polygon.io"
 
     def get_last_trade(self, symbol: str):
