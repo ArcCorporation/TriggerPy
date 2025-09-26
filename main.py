@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk
 from model import AppModel
 from view import Banner, OrderFrame
-from debugger import DebugFrame   # yeni eklendi
+from Helpers.debugger import DebugFrame   # yeni eklendi
 
 
 class ArcTriggerApp(tk.Tk):
