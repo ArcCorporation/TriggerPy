@@ -2,6 +2,7 @@
 import tkinter as tk
 from tkinter import ttk
 from model import AppModel
+from Services.price_watcher import PriceWatcher
 
 
 class Banner(tk.Canvas):
@@ -21,6 +22,7 @@ class OrderFrame(tk.Frame):
         super().__init__(parent, relief="groove", borderwidth=2, padx=10, pady=10, **kwargs)
         self.model = model
         self.order_id = order_id
+        self.watcher = None   # PriceWatcher referansı saklanır
 
         # ---------------- Stock + Market Price ----------------
         ttk.Label(self, text="Stock").grid(row=0, column=0)
@@ -86,17 +88,22 @@ class OrderFrame(tk.Frame):
             print(f"[UI] Symbol search error: {e}")
 
     def on_symbol_selected(self, event):
-        """Kullanıcı dropdown’dan sembol seçtiğinde fiyatını çek ve UI güncelle."""
+        """Kullanıcı dropdown’dan sembol seçtiğinde PriceWatcher başlat."""
         selection = self.combo_symbol.get()
         if not selection:
             return
         symbol = selection.split(" - ")[0]  # sadece sembol
-        try:
-            snap = self.model.polygon.get_snapshot(symbol)
-            if snap and "last" in snap:
-                self.update_price(snap["last"])
-        except Exception as e:
-            print(f"[UI] Price fetch error: {e}")
+
+        # Eğer eski watcher varsa durdur
+        if self.watcher:
+            self.watcher.stop()
+
+        # Yeni watcher başlat
+        self.watcher = PriceWatcher(
+            symbol=symbol,
+            polygon_service=self.model.polygon,
+            update_fn=lambda price: self.lbl_price.after(0, self.update_price, price)
+        )
 
     def save_order(self):
         order = self.model.place_order(
@@ -150,9 +157,5 @@ if __name__ == "__main__":
 
     order2 = OrderFrame(root, model, order_id=2)
     order2.pack(fill="x", pady=5)
-
-    # Test için fiyat update
-    order1.update_price(423.64)
-    order2.update_price(424.23)
 
     root.mainloop()
