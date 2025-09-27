@@ -18,119 +18,99 @@ class Banner(tk.Canvas):
 
 class OrderFrame(tk.Frame):
     def __init__(self, parent, model: AppModel, order_id: int = 0, **kwargs):
-        super().__init__(parent, relief="groove", borderwidth=2, padx=5, pady=5, **kwargs)
+        super().__init__(parent, relief="groove", borderwidth=2, padx=8, pady=8, **kwargs)
         self.model = model
         self.order_id = order_id
 
-        # === Stock + Market Price ===
+        # ---------------- Stock + Market Price ----------------
         ttk.Label(self, text="Stock").grid(row=0, column=0, sticky="w")
-        self.combo_symbol = ttk.Combobox(self, width=10)
+        self.combo_symbol = ttk.Combobox(self, width=22)
         self.combo_symbol.grid(row=0, column=1, padx=5)
+        self.combo_symbol.bind("<KeyRelease>", self.on_symbol_typed)
         self.combo_symbol.bind("<<ComboboxSelected>>", self.on_symbol_selected)
 
         self.lbl_price = ttk.Label(self, text="Market Price: -")
         self.lbl_price.grid(row=0, column=2, padx=5)
 
-        ttk.Label(self, text="Trigger Level").grid(row=0, column=3)
-        self.entry_trigger = ttk.Entry(self, width=7)
+        ttk.Label(self, text="Trigger").grid(row=0, column=3)
+        self.entry_trigger = ttk.Entry(self, width=8)
         self.entry_trigger.grid(row=0, column=4, padx=5)
 
-        # === Call/Put ===
+        # ---------------- Type (Call/Put) + Order Type ----------------
         self.var_type = tk.StringVar(value="CALL")
-        ttk.Radiobutton(self, text="Call", variable=self.var_type, value="CALL").grid(row=0, column=5, padx=2)
-        ttk.Radiobutton(self, text="Put", variable=self.var_type, value="PUT").grid(row=0, column=6, padx=2)
+        ttk.Radiobutton(self, text="Call", variable=self.var_type, value="CALL").grid(row=0, column=5)
+        ttk.Radiobutton(self, text="Put", variable=self.var_type, value="PUT").grid(row=0, column=6)
 
-        # === Strike / Maturity ===
+        ttk.Label(self, text="OrderType").grid(row=0, column=7)
+        self.combo_ordertype = ttk.Combobox(self, values=["MKT", "LMT"], width=6, state="readonly")
+        self.combo_ordertype.grid(row=0, column=8, padx=5)
+        self.combo_ordertype.current(0)
+
+        # ---------------- Strike + Maturity ----------------
         ttk.Label(self, text="Strike").grid(row=1, column=0)
-        self.entry_strike = ttk.Entry(self, width=10)
+        self.entry_strike = ttk.Entry(self, width=8)
         self.entry_strike.grid(row=1, column=1, padx=5)
 
         ttk.Label(self, text="Maturity").grid(row=1, column=2)
         self.entry_maturity = ttk.Entry(self, width=10)
         self.entry_maturity.grid(row=1, column=3, padx=5)
 
-        # === Contract (renk kutusu) ===
-        self.contract_color = tk.Canvas(self, width=20, height=20, bg="yellow")
-        self.contract_color.grid(row=0, column=7, padx=5)
+        # ---------------- Offset + Position Size ----------------
+        ttk.Label(self, text="Offset").grid(row=1, column=4)
+        self.entry_offset = ttk.Entry(self, width=8)
+        self.entry_offset.grid(row=1, column=5, padx=5)
 
-        # === Order Type ===
-        ttk.Label(self, text="Order Type").grid(row=0, column=8)
-        self.var_order_type = tk.StringVar(value="MKT")
-        ttk.Radiobutton(self, text="MKT", variable=self.var_order_type, value="MKT").grid(row=0, column=9)
-        ttk.Radiobutton(self, text="LMT", variable=self.var_order_type, value="LMT").grid(row=0, column=10)
+        ttk.Label(self, text="Pos Size").grid(row=1, column=6)
+        self.entry_pos = ttk.Entry(self, width=8)
+        self.entry_pos.grid(row=1, column=7, padx=5)
 
-        # === Offset ===
-        ttk.Label(self, text="Offset").grid(row=0, column=11)
-        self.entry_offset = ttk.Entry(self, width=5)
-        self.entry_offset.insert(0, "0.00")
-        self.entry_offset.grid(row=0, column=12, padx=2)
+        # ---------------- Quantity + Stop Loss + Profit ----------------
+        ttk.Label(self, text="Qty").grid(row=2, column=0)
+        self.entry_qty = ttk.Entry(self, width=8)
+        self.entry_qty.grid(row=2, column=1, padx=5)
 
-        for i, val in enumerate(["0.20", "0.10", "0.05"]):
-            ttk.Button(self, text=val, command=lambda v=val: self.entry_offset.delete(0, tk.END) or self.entry_offset.insert(0, v)).grid(row=0, column=13+i, padx=1)
+        ttk.Label(self, text="StopLoss").grid(row=2, column=2)
+        self.entry_sl = ttk.Entry(self, width=8)
+        self.entry_sl.grid(row=2, column=3, padx=5)
 
-        # === Position Size ===
-        ttk.Label(self, text="Position Size ($)").grid(row=2, column=0, sticky="w")
-        self.entry_pos_size = ttk.Entry(self, width=10)
-        self.entry_pos_size.insert(0, "0")
-        self.entry_pos_size.grid(row=2, column=1, padx=5)
+        ttk.Label(self, text="Profit %").grid(row=2, column=4)
+        self.entry_tp = ttk.Entry(self, width=8)
+        self.entry_tp.grid(row=2, column=5, padx=5)
 
-        for i, val in enumerate(["5K", "10K", "25K"]):
-            amount = str(int(val.replace("K", "")) * 1000)
-            ttk.Button(self, text=f"${val}", command=lambda v=amount: self.set_position_size(v)).grid(row=2, column=2+i, padx=2)
+        ttk.Button(self, text="Take Profit", command=self.take_profit).grid(row=2, column=6, padx=5)
 
-        # === Quantity ===
-        ttk.Label(self, text="Quantity").grid(row=2, column=5)
-        self.entry_qty = ttk.Entry(self, width=7)
-        self.entry_qty.grid(row=2, column=6, padx=5)
-
-        # === Stop Loss ===
-        ttk.Label(self, text="Stop Loss ($)").grid(row=2, column=7)
-        self.entry_sl = ttk.Entry(self, width=7)
-        self.entry_sl.grid(row=2, column=8, padx=5)
-
-        for i, val in enumerate(["0.20", "0.50", "1.00"]):
-            ttk.Button(self, text=f"${val}", command=lambda v=val: self.set_stop_loss(v)).grid(row=2, column=9+i, padx=2)
-
-        # === Profit Taking ===
-        ttk.Label(self, text="Profit Taking").grid(row=2, column=12)
-        self.entry_tp = ttk.Entry(self, width=7)
-        self.entry_tp.grid(row=2, column=13, padx=5)
-
-        for i, val in enumerate(["10%", "25%", "50%"]):
-            ttk.Button(self, text=val, command=lambda v=val: self.set_profit_taking(v)).grid(row=2, column=14+i, padx=2)
-
-        ttk.Button(self, text="Take Profit", command=self.take_profit).grid(row=2, column=17, padx=5)
-
-        # === Control Buttons ===
+        # ---------------- Control Buttons ----------------
         frame_ctrl = ttk.Frame(self)
-        frame_ctrl.grid(row=3, column=0, columnspan=18, pady=10)
-
+        frame_ctrl.grid(row=3, column=0, columnspan=9, pady=8)
         ttk.Button(frame_ctrl, text="Save", command=self.save_order).pack(side="left", padx=5)
         ttk.Button(frame_ctrl, text="Invalidate", command=self.invalidate_order).pack(side="left", padx=5)
         ttk.Button(frame_ctrl, text="Breakeven", command=self.breakeven_order).pack(side="left", padx=5)
         ttk.Button(frame_ctrl, text="Cancel", command=self.cancel_order).pack(side="left", padx=5)
 
-    # === Helpers ===
-    def set_position_size(self, val):
-        self.entry_pos_size.delete(0, tk.END)
-        self.entry_pos_size.insert(0, val)
-
-    def set_stop_loss(self, val):
-        self.entry_sl.delete(0, tk.END)
-        self.entry_sl.insert(0, val)
-
-    def set_profit_taking(self, val):
-        self.entry_tp.delete(0, tk.END)
-        self.entry_tp.insert(0, val.replace("%", ""))
-
-    def update_price(self, price: float):
-        self.lbl_price.config(text=f"Market Price: {price:.2f}")
+    # ---------------- Handlers ----------------
+    def on_symbol_typed(self, event):
+        query = self.combo_symbol.get().upper()
+        if len(query) < 2:
+            return
+        try:
+            results = self.model.tws.search_symbol(query)
+            if results:
+                symbols = [f"{r['symbol']} - {r.get('primaryExchange', '-')}" for r in results]
+                self.combo_symbol["values"] = symbols
+        except Exception as e:
+            print(f"[UI] Symbol search error: {e}")
 
     def on_symbol_selected(self, event=None):
-        sym = self.combo_symbol.get()
-        price = self.model.set_symbol(sym)
-        if price:
-            self.update_price(price)
+        selection = self.combo_symbol.get()
+        if not selection:
+            return
+        symbol = selection.split(" - ")[0]
+        try:
+            snap = self.model.polygon.get_snapshot(symbol)
+            if snap and "last" in snap:
+                self.update_price(snap["last"])
+        except Exception as e:
+            print(f"[UI] Price fetch error: {e}")
 
     def save_order(self):
         order = self.model.place_order(
@@ -154,29 +134,35 @@ class OrderFrame(tk.Frame):
         self.update_state("CANCELLED")
 
     def take_profit(self):
-        tp = float(self.entry_tp.get() or 0.0)
-        self.model.set_take_profit(tp)
+        print("[UI] Take profit pressed (implement model logic here)")
+
+    # ---------------- Update Methods ----------------
+    def update_price(self, value: float):
+        self.lbl_price.config(text=f"Market Price: {value:.2f}")
+
+    def update_quantity(self, qty: int):
+        self.entry_qty.delete(0, tk.END)
+        self.entry_qty.insert(0, str(qty))
 
     def update_state(self, state: str):
-        self.lbl_price.config(text=f"Market Price: {self.lbl_price.cget('text')} | State: {state}")
+        colors = {"PENDING": "orange", "ACTIVE": "green", "CANCELLED": "red"}
+        self.config(highlightbackground=colors.get(state, "gray"), highlightthickness=2)
 
 
 # ---------------- Test Main ----------------
 if __name__ == "__main__":
     root = tk.Tk()
-    root.title("ArcTriggerPy - Test View")
+    root.title("ArcTriggerPy - View Test")
 
     banner = Banner(root)
     banner.pack(fill="x")
 
     model = AppModel()
+
     order1 = OrderFrame(root, model, order_id=1)
     order1.pack(fill="x", pady=5)
 
     order2 = OrderFrame(root, model, order_id=2)
     order2.pack(fill="x", pady=5)
-
-    order1.update_price(423.64)
-    order2.update_price(424.23)
 
     root.mainloop()

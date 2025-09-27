@@ -1,7 +1,7 @@
 # model.py
 from Services import polygon_service, tws_service
 from Services.order_wait_service import OrderWaitService
-from Helpers.order import Order, OrderState
+from Helpers.Order import Order, OrderState
 
 
 class AppModel:
