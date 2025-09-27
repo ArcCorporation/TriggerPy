@@ -1,4 +1,3 @@
-# model.py
 from Services import polygon_service, tws_service
 from Services.order_wait_service import OrderWaitService
 from Helpers.Order import Order, OrderState
@@ -22,20 +21,16 @@ class AppModel:
         self.polygon = polygon_service.PolygonService()
         self.waiter = OrderWaitService(self.polygon, self.tws)
 
-
-    
-        def reconnect_broker(self):
-            """Reconnect broker"""
-            try:
-                # önce varsa eski bağlantıyı kapat
-                if hasattr(self.tws, "disconnect"):
-                    self.tws.disconnect()
-                # yeniden bağlan
-                self.tws.connect_and_run()
-                return True
-            except Exception as e:
-                print(f"[AppModel] Reconnect failed: {e}")
-                return False
+    def reconnect_broker(self):
+        """Reconnect broker"""
+        try:
+            if hasattr(self.tws, "disconnect"):
+                self.tws.disconnect()
+            self.tws.connect_and_run()
+            return True
+        except Exception as e:
+            print(f"[AppModel] Reconnect failed: {e}")
+            return False
 
     # ---------------- Symbol & Market ----------------
 
@@ -122,21 +117,11 @@ class AppModel:
         # trigger check
         if order.trigger is None or order.is_triggered(self.price):
             # direkt TWS’e gönder
-            result = self.tws.place_bracket_order(
-                symbol=order.symbol,
-                expiry=order.expiry,
-                strike=order.strike,
-                right=order.right,
-                action=order.action,
-                quantity=order.qty,
-                entry_price=order.entry_price,
-                take_profit_price=order.tp_price,
-                stop_loss_price=order.sl_price
-            )
+            result = self.tws.place_bracket_order(order)
             order.mark_active(result)
         else:
             # pending’e at
-            self.waiter.add_order(order.to_dict())
+            self.waiter.add_order(order)
             order.state = OrderState.PENDING
 
         self.orders.append(order)

@@ -1,8 +1,8 @@
 import threading
 import time
-import uuid
 import logging
 import Helpers.printer as p
+from Helpers.Order import Order
 
 
 class OrderWaitService:
@@ -24,14 +24,17 @@ class OrderWaitService:
             t.start()
             self.threads.append(t)
 
-    def add_order(self, order_data: dict) -> str:
-        order_id = str(uuid.uuid4())
-        order_data["order_id"] = order_id
+    def add_order(self, order: Order) -> str:
+        """
+        Add a new Order object to the service.
+        """
+        order_id = order.order_id
         with self.lock:
-            self.pending_orders[order_id] = order_data
+            self.pending_orders[order_id] = order
         with self.queue_cond:
             self.order_queue.append(order_id)
             self.queue_cond.notify()
+
         msg = f"[WaitService] Order added {order_id}"
         logging.info(msg)
         p.PRINT(msg)
@@ -40,6 +43,8 @@ class OrderWaitService:
     def cancel_order(self, order_id: str):
         with self.lock:
             if order_id in self.pending_orders:
+                order = self.pending_orders[order_id]
+                order.mark_cancelled()
                 self.cancelled_orders.add(order_id)
                 del self.pending_orders[order_id]
                 msg = f"[WaitService] Order cancelled {order_id}"
@@ -48,7 +53,7 @@ class OrderWaitService:
 
     def list_pending_orders(self):
         with self.lock:
-            return list(self.pending_orders.values())
+            return [o.to_dict() for o in self.pending_orders.values()]
 
     def _worker_loop(self):
         while True:
@@ -58,9 +63,9 @@ class OrderWaitService:
                 order_id = self.order_queue.pop(0)
 
             with self.lock:
-                order_data = self.pending_orders.get(order_id)
+                order = self.pending_orders.get(order_id)
 
-            if not order_data:
+            if not order:
                 continue
 
             msg = f"[WaitService] Worker started for {order_id}"
@@ -74,41 +79,38 @@ class OrderWaitService:
                     p.PRINT(msg)
                     break
 
-                snap = self.polygon.get_snapshot(order_data["symbol"])
+                snap = self.polygon.get_snapshot(order.symbol)
                 if not snap or "last" not in snap:
                     time.sleep(self.poll_interval)
                     continue
 
                 price = snap["last"]
-                trigger = order_data["trigger"]
-                typ = order_data["type"]
 
-                if typ == "CALL" and price >= trigger:
-                    self._finalize_order(order_id, order_data)
-                    break
-                elif typ == "PUT" and price <= trigger:
-                    self._finalize_order(order_id, order_data)
+                if order.is_triggered(price):
+                    self._finalize_order(order_id, order)
                     break
 
                 time.sleep(self.poll_interval)
 
-    def _finalize_order(self, order_id, order_data):
+    def _finalize_order(self, order_id, order: Order):
         try:
             result = self.tws.place_bracket_order(
-                symbol=order_data["symbol"],
-                expiry=order_data["expiry"],
-                strike=order_data["strike"],
-                right=order_data["right"],
-                action="BUY" if order_data["type"] == "CALL" else "SELL",
-                quantity=order_data["qty"],
-                entry_price=order_data["entry_price"],
-                take_profit_price=order_data["tp_price"],
-                stop_loss_price=order_data["sl_price"]
+                symbol=order.symbol,
+                expiry=order.expiry,
+                strike=order.strike,
+                right=order.right,
+                action=order.action,
+                quantity=order.qty,
+                entry_price=order.entry_price,
+                take_profit_price=order.tp_price,
+                stop_loss_price=order.sl_price
             )
+            order.mark_active(result)
             msg = f"[WaitService] Order finalized {order_id} → {result}"
             logging.info(msg)
             p.PRINT(msg)
         except Exception as e:
+            order.mark_failed(str(e))
             msg = f"[WaitService] Finalize failed {order_id}: {e}"
             logging.error(msg)
             p.PRINT(msg)

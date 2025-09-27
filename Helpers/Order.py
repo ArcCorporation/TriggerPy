@@ -1,6 +1,6 @@
-# Helpers/order.py
 import uuid
 import enum
+from ibapi.order import Order as IBOrder  # import IB's order class
 
 
 class OrderState(enum.Enum):
@@ -71,3 +71,32 @@ class Order:
             "state": self.state.value,
             "result": self.result,
         }
+
+    def to_ib_order(self, order_type="LMT", limit_price=None, stop_price=None,
+                    parent_id=None, transmit=True) -> IBOrder:
+        """
+        Convert this custom Order into an Interactive Brokers IBOrder.
+        - order_type: "MKT", "LMT", or "STP"
+        - limit_price: used if order_type == "LMT"
+        - stop_price: used if order_type == "STP"
+        - parent_id: used if this order is part of a bracket
+        - transmit: whether to transmit immediately
+        """
+        ib_order = IBOrder()
+        ib_order.action = self.action
+        ib_order.totalQuantity = self.qty
+        ib_order.orderType = order_type
+
+        if order_type == "LMT" and limit_price is not None:
+            ib_order.lmtPrice = limit_price
+        if order_type == "STP" and stop_price is not None:
+            ib_order.auxPrice = stop_price
+
+        if parent_id is not None:
+            ib_order.parentId = parent_id
+
+        ib_order.transmit = transmit
+        ib_order.eTradeOnly = False
+        ib_order.firmQuoteOnly = False
+
+        return ib_order

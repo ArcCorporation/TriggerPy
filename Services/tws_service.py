@@ -1,11 +1,13 @@
-# Services/tws_service.py
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
-from ibapi.order import Order
+from ibapi.order import Order as IBOrder
 import threading
 import time
 import random
+
+from Helpers.Order import Order
+
 
 class TWSService(EWrapper, EClient):
     def __init__(self):
@@ -16,7 +18,6 @@ class TWSService(EWrapper, EClient):
 
     # --- Connection / Lifecycle ---
     def connect_and_run(self, host="127.0.0.1", port=7497, client_id=1):
-
         id = random.randint(1, 10000)
         self.connect(host, port, id)
         thread = threading.Thread(target=self.run, daemon=True)
@@ -26,7 +27,7 @@ class TWSService(EWrapper, EClient):
     def nextValidId(self, orderId: int):
         self.nextOrderId = orderId
 
-    def error(self, reqId, errorCode, errorString,x,y):
+    def error(self, reqId, errorCode, errorString, x, y):
         # suppress IB spam (only show real errors)
         if errorCode < 2000:
             print(f"[Error] reqId={reqId}, code={errorCode}, msg={errorString}")
@@ -77,8 +78,9 @@ class TWSService(EWrapper, EClient):
         time.sleep(2)
         return self.contract_details.get(reqId, [])
 
-    # --- Contract Builders ---
-    def option_contract(self, symbol, expiry, strike, right, exchange="SMART", currency="USD"):
+    # --- Contract Builder ---
+    def option_contract(self, symbol, expiry, strike, right,
+                        exchange="SMART", currency="USD"):
         c = Contract()
         c.symbol = symbol
         c.secType = "OPT"
@@ -90,95 +92,88 @@ class TWSService(EWrapper, EClient):
         c.multiplier = "100"
         return c
 
-    # --- Order Builder ---
-    def create_order(self, action, quantity, order_type="MKT",
-                     limit_price=None, stop_price=None,
-                     parent_id=None, transmit=True):
-        o = Order()
-        o.action = action
-        o.totalQuantity = quantity
-        o.orderType = order_type
-        if order_type == "LMT" and limit_price is not None:
-            o.lmtPrice = limit_price
-        if order_type == "STP" and stop_price is not None:
-            o.auxPrice = stop_price
-        if parent_id is not None:
-            o.parentId = parent_id
-        o.transmit = transmit
-        o.eTradeOnly = False
-        o.firmQuoteOnly = False
-        return o
-
     # --- Place Bracket Order (Options) ---
-    def place_bracket_order(self, symbol, expiry, strike, right,
-                            action, quantity, entry_price,
-                            take_profit_price, stop_loss_price):
+    def place_bracket_order(self, order: Order):
         if self.nextOrderId is None:
             raise Exception("NextValidId not received, call connect_and_run() first")
 
         parent_id = self.nextOrderId
         self.nextOrderId += 1
 
-        contract = self.option_contract(symbol, expiry, strike, right)
+        contract = self.option_contract(order.symbol, order.expiry, order.strike, order.right)
 
-        parent = self.create_order(action, quantity, "LMT",
-                                   limit_price=entry_price,
-                                   transmit=False)
+        # Parent: limit entry
+        parent = order.to_ib_order(
+            order_type="LMT",
+            limit_price=order.entry_price,
+            parent_id=None,
+            transmit=False
+        )
         parent.orderId = parent_id
 
-        tp = self.create_order("SELL" if action == "BUY" else "BUY",
-                               quantity, "LMT",
-                               limit_price=take_profit_price,
-                               parent_id=parent_id,
-                               transmit=False)
+        # Take Profit: opposite side, limit
+        tp = order.to_ib_order(
+            action="SELL" if order.action == "BUY" else "BUY",
+            order_type="LMT",
+            limit_price=order.tp_price,
+            parent_id=parent_id,
+            transmit=False
+        )
         tp.orderId = self.nextOrderId
         self.nextOrderId += 1
 
-        sl = self.create_order("SELL" if action == "BUY" else "BUY",
-                               quantity, "STP",
-                               stop_price=stop_loss_price,
-                               parent_id=parent_id,
-                               transmit=True)
+        # Stop Loss: opposite side, stop
+        sl = order.to_ib_order(
+            action="SELL" if order.action == "BUY" else "BUY",
+            order_type="STP",
+            stop_price=order.sl_price,
+            parent_id=parent_id,
+            transmit=True
+        )
         sl.orderId = self.nextOrderId
         self.nextOrderId += 1
 
+        # Place all 3 orders
         self.placeOrder(parent.orderId, contract, parent)
         self.placeOrder(tp.orderId, contract, tp)
         self.placeOrder(sl.orderId, contract, sl)
 
-        return {
+        result = {
             "parent": parent.orderId,
             "take_profit": tp.orderId,
             "stop_loss": sl.orderId
         }
 
+        order.mark_active(result)
+        return result
+
 
 # --- Example CLI Run ---
 if __name__ == "__main__":
+    from Helpers.Order import Order
+
     tws = TWSService()
     tws.connect_and_run()
 
-    # 1. Symbol search
     syms = tws.search_symbol("TSLA")
-    print("Search result:", syms[:3])  # first 3 matches
+    print("Search result:", syms[:3])
 
-    # 2. Option chain fetch
     chain = tws.get_option_chain("TSLA", expiry="20250926")
     print("Chain sample:", chain[:3])
 
-    # 3. Place example order
     if chain:
-        order_ids = tws.place_bracket_order(
+        my_order = Order(
             symbol="TSLA",
             expiry=chain[0]["expiry"],
             strike=chain[0]["strike"],
             right=chain[0]["right"],
-            action="BUY",
-            quantity=1,
+            qty=1,
             entry_price=5.0,
-            take_profit_price=7.0,
-            stop_loss_price=4.0
+            tp_price=7.0,
+            sl_price=4.0,
+            action="BUY"
         )
+        order_ids = tws.place_bracket_order(my_order)
         print("Placed bracket:", order_ids)
 
     time.sleep(5)
