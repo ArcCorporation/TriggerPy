@@ -5,7 +5,7 @@ from ibapi.order import Order as IBOrder
 import threading
 import time
 import random
-
+import logging
 from Helpers.Order import Order
 
 
@@ -19,7 +19,10 @@ class TWSService(EWrapper, EClient):
     # --- Connection / Lifecycle ---
     def connect_and_run(self, host="127.0.0.1", port=7497, client_id=1):
         id = random.randint(1, 10000)
-        self.connect(host, port, id)
+        try:
+            self.connect(host, port, id)
+        except Exception:
+            logging.INFO("connection erroe")
         thread = threading.Thread(target=self.run, daemon=True)
         thread.start()
         time.sleep(1)
