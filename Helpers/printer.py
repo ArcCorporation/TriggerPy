@@ -1,9 +1,10 @@
+import logging
 
-PRINT = None
+# Configure the root logger once
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(levelname)s] %(message)s"
+)
 
-def set_p(calback):
-    PRINT = calback
-
-
-
-
+# Expose logger object for convenience
+logger = logging.getLogger()

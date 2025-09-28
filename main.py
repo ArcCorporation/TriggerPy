@@ -3,7 +3,9 @@ from tkinter import ttk
 from model import AppModel
 from view import Banner, OrderFrame
 from Helpers.debugger import DebugFrame   # yeni eklendi
-import Helpers.printer as p
+import Helpers.printer 
+import logging
+from Helpers.debugger import DebugFrame, TkinterHandler
 
 class ArcTriggerApp(tk.Tk):
     def __init__(self):
@@ -64,16 +66,32 @@ class ArcTriggerApp(tk.Tk):
             self.order_frames.append(frame)
 
     def toggle_debug(self):
-        """Debug konsolu aç/kapat."""
+        """Toggle the debug console and attach/detach logging handler."""
+        
+
         if self.debug_frame and self.debug_frame.winfo_exists():
+            # Close existing debug frame
             self.debug_frame.destroy()
             self.debug_frame = None
             self.btn_debug.config(text="Show Debug")
+
+            # Remove attached TkinterHandler(s)
+            for h in logging.getLogger().handlers[:]:
+                if isinstance(h, TkinterHandler):
+                    logging.getLogger().removeHandler(h)
+
         else:
+            # Create and show new debug frame
             self.debug_frame = DebugFrame(self)
             self.debug_frame.pack(fill="both", expand=True, padx=10, pady=10)
             self.debug_frame.add_text("[INFO] Debug console started")
-            p.set_p(self.debug_frame.add_text)
+
+            # Attach handler
+            handler = TkinterHandler(self.debug_frame)
+            handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+            logging.getLogger().addHandler(handler)
+            logging.getLogger().setLevel(logging.INFO)
+
             self.btn_debug.config(text="Hide Debug")
 
 

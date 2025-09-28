@@ -1,43 +1,28 @@
-# debugger.py
 import tkinter as tk
 from tkinter import scrolledtext
+import logging
 
 
 class DebugFrame(tk.Frame):
-    def __init__(self, parent, **kwargs):
-        super().__init__(parent, **kwargs)
+    def __init__(self, master):
+        super().__init__(master)
+        self.text = scrolledtext.ScrolledText(self, wrap="word", state="disabled")
+        self.text.pack(fill="both", expand=True)
 
-        # Text alanı + scrollbar
-        self.text_area = scrolledtext.ScrolledText(
-            self,
-            wrap=tk.WORD,
-            height=12,
-            width=80,
-            state="disabled",   # sadece yazdırma için
-            bg="black",
-            fg="lime",
-            font=("Consolas", 10)
-        )
-        self.text_area.pack(fill="both", expand=True)
-
-    def add_text(self, message: str):
-        """Yeni satır ekler ve otomatik scroll yapar."""
-        self.text_area.configure(state="normal")
-        self.text_area.insert(tk.END, message + "\n")
-        self.text_area.configure(state="disabled")
-        self.text_area.see(tk.END)
+    def add_text(self, msg: str):
+        """Append a line of text to the debug console."""
+        self.text.configure(state="normal")
+        self.text.insert("end", msg + "\n")
+        self.text.configure(state="disabled")
+        self.text.see("end")
 
 
-# --- Test main ---
-if __name__ == "__main__":
-    root = tk.Tk()
-    root.title("ArcTriggerPy - Debug Console")
+class TkinterHandler(logging.Handler):
+    """Custom logging handler that forwards log messages into DebugFrame."""
+    def __init__(self, debug_frame: DebugFrame):
+        super().__init__()
+        self.debug_frame = debug_frame
 
-    dbg = DebugFrame(root)
-    dbg.pack(fill="both", expand=True)
-
-    dbg.add_text("[INFO] Debug console started")
-    dbg.add_text("[OK] System initialized")
-    dbg.add_text("[ERROR] Dummy error log here")
-
-    root.mainloop()
+    def emit(self, record):
+        msg = self.format(record)
+        self.debug_frame.add_text(msg)
