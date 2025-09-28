@@ -90,7 +90,7 @@ class OrderFrame(tk.Frame):
     # ---------------- Handlers ----------------
     def on_symbol_typed(self, event):
         query = self.combo_symbol.get().upper()
-        if len(query) < 2:
+        if len(query) < 3:
             return
         try:
             results = self.model.tws.search_symbol(query)

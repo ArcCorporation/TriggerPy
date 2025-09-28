@@ -22,7 +22,7 @@ class TWSService(EWrapper, EClient):
         try:
             self.connect(host, port, id)
         except Exception:
-            logging.INFO("connection erroe")
+            logging.debug("connection erroe")
         thread = threading.Thread(target=self.run, daemon=True)
         thread.start()
         time.sleep(1)
