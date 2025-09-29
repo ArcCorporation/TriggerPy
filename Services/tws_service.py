@@ -6,7 +6,8 @@ import threading
 import time
 import random
 import logging
-from Helpers.Order import Order
+from Order import Order
+
 
 
 class TWSService(EWrapper, EClient):
@@ -30,7 +31,7 @@ class TWSService(EWrapper, EClient):
     def nextValidId(self, orderId: int):
         self.nextOrderId = orderId
 
-    def error(self, reqId, errorCode, errorString, x, y):
+    def error(self, reqId, errorCode, errorString):
         # suppress IB spam (only show real errors)
         if errorCode < 2000:
             print(f"[Error] reqId={reqId}, code={errorCode}, msg={errorString}")
@@ -153,7 +154,7 @@ class TWSService(EWrapper, EClient):
 
 # --- Example CLI Run ---
 if __name__ == "__main__":
-    from Helpers.Order import Order
+    from Order import Order
 
     tws = TWSService()
     tws.connect_and_run()
