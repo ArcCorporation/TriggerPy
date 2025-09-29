@@ -10,12 +10,9 @@ import random
 from typing import List, Dict, Optional
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-)
 
-logger = logging.getLogger('TWSService')
+
+
 
 class TWSService(EWrapper, EClient):
     """
@@ -39,12 +36,13 @@ class TWSService(EWrapper, EClient):
         self._request_counter = 1
         
         # Track custom orders from Helpers.Order
+        self.option_chains = {}  # Add this line
         self._pending_orders = {}  # custom_order_id -> Helpers.Order object
 
     def nextValidId(self, orderId: int):
         super().nextValidId(orderId)
         self.next_valid_order_id = orderId
-        logger.info(f"NextValidId: {orderId} (Client ID: {self.client_id})")
+        logging.info(f"NextValidId: {orderId} (Client ID: {self.client_id})")
         self.connection_ready.set()
 
     def error(self, reqId, errorCode, errorString, *args):
@@ -61,52 +59,52 @@ class TWSService(EWrapper, EClient):
         
         # Handle specific error codes
         if actual_error_code in [2104, 2106, 2158]:
-            logger.info(f"TWS Info. Code: {actual_error_code}, Msg: {errorString}")
+            logging.info(f"TWS Info. Code: {actual_error_code}, Msg: {errorString}")
         elif actual_error_code == 502:
-            logger.error("Connection failed - check TWS/IB Gateway")
+            logging.error("Connection failed - check TWS/IB Gateway")
             self.connection_ready.clear()
         elif actual_error_code == 504:
-            logger.error(f"Not connected to TWS: {errorString}")
+            logging.error(f"Not connected to TWS: {errorString}")
             self.connection_ready.clear()
         elif actual_error_code == 200:
-            logger.warning(f"No security definition for reqId {reqId}")
+            logging.warning(f"No security definition for reqId {reqId}")
             if reqId == self._maturities_req_id:
                 self._maturities_event.set()
             elif reqId == self._contract_details_req_id:
                 self._contract_details_event.set()
         elif actual_error_code == 321:
-            logger.error(f"Contract validation error for reqId {reqId}: {errorString}")
+            logging.error(f"Contract validation error for reqId {reqId}: {errorString}")
             if reqId == self._maturities_req_id:
                 self._maturities_event.set()
         else:
-            logger.error(f"API Error. reqId: {reqId}, Code: {actual_error_code}, Msg: {errorString}")
+            logging.error(f"API Error. reqId: {reqId}, Code: {actual_error_code}, Msg: {errorString}")
 
     def orderStatus(self, orderId, status, filled, remaining, avgFillPrice, permId, parentId, lastFillPrice, clientId, whyHeld, mktCapPrice):
         """Update custom order status based on IB callbacks"""
-        logger.info(f"Order status - ID: {orderId}, Status: {status}, Filled: {filled}")
+        logging.info(f"Order status - ID: {orderId}, Status: {status}, Filled: {filled}")
         
         # Find and update the corresponding custom order
         for custom_order_id, custom_order in self._pending_orders.items():
             if hasattr(custom_order, '_ib_order_id') and custom_order._ib_order_id == orderId:
                 if status == "Filled":
                     custom_order.mark_active(result=orderId)
-                    logger.info(f"Custom order {custom_order_id} filled")
+                    logging.info(f"Custom order {custom_order_id} filled")
                 elif status in ["Cancelled", "ApiCancelled"]:
                     custom_order.mark_cancelled()
-                    logger.info(f"Custom order {custom_order_id} cancelled")
+                    logging.info(f"Custom order {custom_order_id} cancelled")
 
     def openOrder(self, orderId, contract, order: IBOrder, orderState):
-        logger.info(f"Order opened - ID: {orderId}, Symbol: {contract.symbol}")
+        logging.info(f"Order opened - ID: {orderId}, Symbol: {contract.symbol}")
 
     def execDetails(self, reqId, contract, execution):
-        logger.info(f"Order executed - ID: {execution.orderId}, Price: {execution.price}")
+        logging.info(f"Order executed - ID: {execution.orderId}, Price: {execution.price}")
 
     def securityDefinitionOptionParameter(self, reqId: int, exchange: str,
                                         underlyingConId: int, tradingClass: str,
                                         multiplier: str, expirations: List[str],
                                         strikes: List[float]):
         """Callback for option chain data"""
-        logger.info(f"Option chain data: {len(expirations)} expirations, {len(strikes)} strikes")
+        logging.info(f"Option chain data: {len(expirations)} expirations, {len(strikes)} strikes")
         self._maturities_data[reqId] = {
             'exchange': exchange,
             'underlyingConId': underlyingConId,
@@ -128,13 +126,13 @@ class TWSService(EWrapper, EClient):
         self._contract_details_event.set()
 
     def connectionClosed(self):
-        logger.warning("Connection to TWS closed")
+        logging.warning("Connection to TWS closed")
         self.connection_ready.clear()
 
     def connect_and_start(self, host='127.0.0.1', port=7497, timeout=10):
         """Connect to TWS/IB Gateway"""
         try:
-            logger.info(f"Connecting to TWS on {host}:{port} with Client ID: {self.client_id}")
+            logging.info(f"Connecting to TWS on {host}:{port} with Client ID: {self.client_id}")
             self.connect(host, port, self.client_id)
             
             api_thread = threading.Thread(
@@ -145,14 +143,14 @@ class TWSService(EWrapper, EClient):
             api_thread.start()
             
             if self.connection_ready.wait(timeout=timeout):
-                logger.info("Successfully connected to TWS")
+                logging.info("Successfully connected to TWS")
                 return True
             else:
-                logger.error("Connection timeout")
+                logging.error("Connection timeout")
                 return False
                 
         except Exception as e:
-            logger.error(f"Failed to connect to TWS: {str(e)}")
+            logging.error(f"Failed to connect to TWS: {str(e)}")
             return False
 
     def is_connected(self):
@@ -167,7 +165,7 @@ class TWSService(EWrapper, EClient):
                       timeout: int = 10) -> Optional[Dict]:
         """Get option expirations and strikes for a symbol"""
         if not self.is_connected():
-            logger.error("Not connected to TWS")
+            logging.error("Not connected to TWS")
             return None
 
         # Resolve underlying contract first
@@ -175,7 +173,7 @@ class TWSService(EWrapper, EClient):
         underlying_conid = self.resolve_conid(underlying_contract)
         
         if not underlying_conid:
-            logger.error(f"Failed to resolve conId for {symbol}")
+            logging.error(f"Failed to resolve conId for {symbol}")
             return None
 
         req_id = self._get_next_req_id()
@@ -184,7 +182,7 @@ class TWSService(EWrapper, EClient):
         self._maturities_event.clear()
 
         try:
-            logger.info(f"Requesting option chain for {symbol}")
+            logging.info(f"Requesting option chain for {symbol}")
             self.reqSecDefOptParams(
                 reqId=req_id, 
                 underlyingSymbol=symbol,
@@ -196,17 +194,17 @@ class TWSService(EWrapper, EClient):
             if self._maturities_event.wait(timeout=timeout):
                 data = self._maturities_data.get(req_id)
                 if data:
-                    logger.info(f"Retrieved {len(data['expirations'])} expirations for {symbol}")
+                    logging.info(f"Retrieved {len(data['expirations'])} expirations for {symbol}")
                     return data
                 else:
-                    logger.warning(f"No option chain data for {symbol}")
+                    logging.warning(f"No option chain data for {symbol}")
                     return None
             else:
-                logger.error(f"Timeout getting option chain for {symbol}")
+                logging.error(f"Timeout getting option chain for {symbol}")
                 return None
 
         except Exception as e:
-            logger.error(f"Error getting maturities for {symbol}: {str(e)}")
+            logging.error(f"Error getting maturities for {symbol}: {str(e)}")
             return None
         finally:
             if req_id in self._maturities_data:
@@ -229,7 +227,7 @@ class TWSService(EWrapper, EClient):
                 details = self._contract_details.get(req_id)
                 if details:
                     conid = details.contract.conId
-                    logger.info(f"Resolved conId {conid} for {contract.symbol}")
+                    logging.info(f"Resolved conId {conid} for {contract.symbol}")
                     return conid
                 else:
                     return None
@@ -237,7 +235,7 @@ class TWSService(EWrapper, EClient):
                 return None
 
         except Exception as e:
-            logger.error(f"Error resolving conId: {str(e)}")
+            logging.error(f"Error resolving conId: {str(e)}")
             return None
         finally:
             if req_id in self._contract_details:
@@ -273,7 +271,7 @@ class TWSService(EWrapper, EClient):
         Place an order using your custom Order object from Helpers.Order.
         """
         if not self.is_connected():
-            logger.error(f"Cannot place order: Not connected to TWS")
+            logging.error(f"Cannot place order: Not connected to TWS")
             return False
 
         try:
@@ -292,7 +290,7 @@ class TWSService(EWrapper, EClient):
             # ✅ RESOLVE CONTRACT FIRST to avoid error 200
             conid = self.resolve_conid(contract)
             if not conid:
-                logger.error(f"Could not resolve contract for {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right}")
+                logging.error(f"Could not resolve contract for {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right}")
                 custom_order.mark_failed("Contract resolution failed")
                 return False
 
@@ -316,14 +314,14 @@ class TWSService(EWrapper, EClient):
             
             self.placeOrder(order_id, contract, ib_order)
             
-            logger.info(f"Placed custom order: {custom_order.order_id} -> IB ID: {order_id}")
+            logging.info(f"Placed custom order: {custom_order.order_id} -> IB ID: {order_id}")
             
             # Increment order ID for next use
             self.next_valid_order_id += 1
             return True
             
         except Exception as e:
-            logger.error(f"Failed to place custom order {custom_order.order_id}: {str(e)}")
+            logging.error(f"Failed to place custom order {custom_order.order_id}: {str(e)}")
             custom_order.mark_failed(reason=str(e))
             return False
 
@@ -334,7 +332,7 @@ class TWSService(EWrapper, EClient):
             if hasattr(order, '_ib_order_id'):
                 self.cancelOrder(order._ib_order_id)
                 order.mark_cancelled()
-                logger.info(f"Cancelled order {custom_order_id}")
+                logging.info(f"Cancelled order {custom_order_id}")
                 return True
         return False
 
@@ -347,7 +345,7 @@ class TWSService(EWrapper, EClient):
             return order.to_dict()
         return None
     def disconnect_gracefully(self):
-        logger.info("Disconnecting from TWS...")
+        logging.info("Disconnecting from TWS...")
         self.connection_ready.clear()
         self.disconnect()
 

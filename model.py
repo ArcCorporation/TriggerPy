@@ -1,4 +1,4 @@
-# model.py - COMPLETE VERSION
+# model.py
 import logging
 from Services.polygon_service import PolygonService
 from Services.tws_service import create_tws_service
@@ -7,11 +7,7 @@ from Helpers.Order import Order, OrderState
 from typing import List, Dict, Optional, Tuple
 
 class AppModel:
-    """
-    MVC Model - Pure data and business logic
-    """
     def __init__(self):
-        # Application state
         self._symbol: Optional[str] = None
         self._underlying_price: Optional[float] = None
         self._expiry: Optional[str] = None
@@ -21,19 +17,16 @@ class AppModel:
         self._take_profit: Optional[float] = None
         self._orders: List[Order] = []
         
-        # Service layer
         self._tws_service = create_tws_service()
         self._polygon_service = PolygonService()
         self._order_wait_service = OrderWaitService(self._polygon_service, self._tws_service)
-        
         self._connected = False
 
-    # ==================== CONNECTION MANAGEMENT ====================
     def connect_services(self) -> bool:
         try:
             if self._tws_service.connect_and_start():
                 self._connected = True
-                logging.info("AppModel: Services connected successfully")
+                logging.info("AppModel: Services connected")
                 return True
             else:
                 logging.error("AppModel: Failed to connect to TWS")
@@ -54,7 +47,6 @@ class AppModel:
     def is_connected(self) -> bool:
         return self._connected
 
-    # ==================== SYMBOL & MARKET DATA ====================
     @property
     def symbol(self) -> Optional[str]:
         return self._symbol
@@ -62,10 +54,6 @@ class AppModel:
     @symbol.setter
     def symbol(self, value: str):
         self._symbol = value.upper() if value else None
-
-    @property
-    def underlying_price(self) -> Optional[float]:
-        return self._underlying_price
 
     def refresh_market_price(self) -> Optional[float]:
         if not self._symbol:
@@ -75,21 +63,8 @@ class AppModel:
             logging.info(f"AppModel: Market price for {self._symbol}: {self._underlying_price}")
             return self._underlying_price
         except Exception as e:
-            logging.error(f"AppModel: Failed to get market price for {self._symbol}: {e}")
+            logging.error(f"AppModel: Failed to get market price: {e}")
             return None
-
-    # ==================== OPTION CONTRACT MANAGEMENT ====================
-    @property
-    def expiry(self) -> Optional[str]:
-        return self._expiry
-
-    @property
-    def strike(self) -> Optional[float]:
-        return self._strike
-
-    @property
-    def right(self) -> Optional[str]:
-        return self._right
 
     def set_option_contract(self, expiry: str, strike: float, right: str) -> Tuple[str, float, str]:
         right = right.upper()
@@ -128,73 +103,35 @@ class AppModel:
         try:
             maturities = self._tws_service.get_maturities(self._symbol)
             if maturities:
-                expirations = sorted(list(maturities['expirations']))
-                logging.info(f"AppModel: Found {len(expirations)} expirations for {self._symbol}")
-                return expirations
+                return sorted(list(maturities['expirations']))
             return []
         except Exception as e:
             logging.error(f"AppModel: Failed to get maturities: {e}")
             return []
 
-    def get_available_strikes(self, expiry: str) -> List[float]:
-        if not self._symbol:
-            return []
-        try:
-            maturities = self._tws_service.get_maturities(self._symbol)
-            if maturities and expiry in maturities['expirations']:
-                strikes = sorted(list(maturities['strikes']))
-                logging.info(f"AppModel: Found {len(strikes)} strikes for {expiry}")
-                return strikes
-            return []
-        except Exception as e:
-            logging.error(f"AppModel: Failed to get strikes: {e}")
-            return []
+    def _validate_breakout_trigger(self, trigger_price: Optional[float], current_price: float) -> bool:
+        """Breakout-only validation: trigger must be above current price for calls"""
+        if trigger_price is None:
+            return True
+        
+        if trigger_price <= current_price:
+            logging.error(f"AppModel: Breakout violation - trigger {trigger_price} <= current {current_price}")
+            return False
+        
+        return True
 
-    # ==================== RISK MANAGEMENT ====================
-    @property
-    def stop_loss(self) -> Optional[float]:
-        return self._stop_loss
-
-    @stop_loss.setter
-    def stop_loss(self, value: float):
-        if value and value > 0:
-            self._stop_loss = value
-            logging.info(f"AppModel: Stop loss set to {value}")
-
-    @property
-    def take_profit(self) -> Optional[float]:
-        return self._take_profit
-
-    @take_profit.setter
-    def take_profit(self, value: float):
-        if value and value > 0:
-            self._take_profit = value
-            logging.info(f"AppModel: Take profit set to {value}")
-
-    def calculate_position_size(self, risk_amount: float, entry_price: float) -> int:
-        if not entry_price or entry_price <= 0:
-            return 0
-        quantity = max(1, int(risk_amount / entry_price))
-        logging.info(f"AppModel: Calculated position size: {quantity} contracts")
-        return quantity
-
-    def auto_calculate_risk(self, entry_price: float, risk_percent: float = 20) -> Tuple[float, float]:
-        if not entry_price or entry_price <= 0:
-            return None, None
-        self._stop_loss = round(entry_price * (1 - risk_percent / 100), 2)
-        self._take_profit = round(entry_price * (1 + risk_percent / 100), 2)
-        logging.info(f"AppModel: Auto risk calculated - SL: {self._stop_loss}, TP: {self._take_profit}")
-        return self._stop_loss, self._take_profit
-
-    # ==================== ORDER MANAGEMENT ====================
     def place_option_order(self, action: str = "BUY", quantity: int = 1, 
                           trigger_price: Optional[float] = None) -> Dict:
         if not all([self._symbol, self._expiry, self._strike, self._right]):
-            raise ValueError("Option parameters not set (symbol, expiry, strike, right)")
+            raise ValueError("Option parameters not set")
 
         current_price = self.refresh_market_price()
         if not current_price:
             raise ValueError("Could not get current market price")
+
+        # BREAKOUT VALIDATION
+        if not self._validate_breakout_trigger(trigger_price, current_price):
+            raise ValueError(f"Trigger {trigger_price} must be above current price {current_price} for breakout")
 
         order = Order(
             symbol=self._symbol,
@@ -219,10 +156,23 @@ class AppModel:
                 logging.error(f"AppModel: Order failed: {order.order_id}")
         else:
             self._order_wait_service.add_order(order)
-            logging.info(f"AppModel: Order waiting for trigger: {order.order_id}")
+            logging.info(f"AppModel: Order waiting for breakout: {order.order_id}")
 
         self._orders.append(order)
         return order.to_dict()
+    
+    def get_available_strikes(self, expiry: str) -> List[float]:
+        """Get available strikes for a given expiration date"""
+        # CHANGE THIS LINE - use _maturities_data instead of option_chains
+        if not self._tws_service or not self._tws_service._maturities_data:
+            return []
+        
+        # Get strikes from your existing _maturities_data structure
+        for req_id, chain_data in self._tws_service._maturities_data.items():
+            if expiry in chain_data.get('expirations', []):
+                return chain_data.get('strikes', [])
+        
+        return []
 
     def cancel_pending_order(self, order_id: str) -> bool:
         for order in self._orders:
@@ -231,7 +181,6 @@ class AppModel:
                 order.mark_cancelled()
                 logging.info(f"AppModel: Order cancelled: {order_id}")
                 return True
-        logging.warning(f"AppModel: Order not found or not pending: {order_id}")
         return False
 
     def get_orders(self, state_filter: Optional[str] = None) -> List[Dict]:
@@ -240,26 +189,6 @@ class AppModel:
                     if order.state.value == state_filter]
         return [order.to_dict() for order in self._orders]
 
-    def get_order_by_id(self, order_id: str) -> Optional[Dict]:
-        for order in self._orders:
-            if order.order_id == order_id:
-                return order.to_dict()
-        return None
-
-    def update_order_risk(self, order_id: str, stop_loss: Optional[float] = None, 
-                         take_profit: Optional[float] = None) -> bool:
-        for order in self._orders:
-            if order.order_id == order_id:
-                if stop_loss is not None:
-                    order.sl_price = stop_loss
-                if take_profit is not None:
-                    order.tp_price = take_profit
-                logging.info(f"AppModel: Order updated: {order_id}")
-                return True
-        logging.warning(f"AppModel: Order not found for update: {order_id}")
-        return False
-
-    # ==================== APPLICATION STATE MANAGEMENT ====================
     def reset(self):
         self._symbol = None
         self._underlying_price = None
@@ -270,32 +199,4 @@ class AppModel:
         self._take_profit = None
         logging.info("AppModel: Model state reset")
 
-    def clear_orders(self):
-        self._orders.clear()
-        logging.info("AppModel: All orders cleared")
-
-    def get_application_state(self) -> Dict:
-        return {
-            "symbol": self._symbol,
-            "underlying_price": self._underlying_price,
-            "expiry": self._expiry,
-            "strike": self._strike,
-            "right": self._right,
-            "stop_loss": self._stop_loss,
-            "take_profit": self._take_profit,
-            "connected": self._connected,
-            "orders_count": len(self._orders),
-            "pending_orders": len([o for o in self._orders if o.state == OrderState.PENDING]),
-            "active_orders": len([o for o in self._orders if o.state == OrderState.ACTIVE])
-        }
-
-    # ==================== CONTEXT MANAGEMENT ====================
-    def __enter__(self):
-        self.connect_services()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.disconnect_services()
-
-# Singleton instance
 app_model = AppModel()
