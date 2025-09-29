@@ -24,7 +24,7 @@ class PolygonService:
         self.ws_thread = None
 
         # Background websocket start
-        self._start_ws()
+        #self._start_ws()
 
     # ---------------- REST METHODS ----------------
     def get_last_trade(self, symbol: str):

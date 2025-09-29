@@ -1,32 +1,46 @@
+import logging
+import time
 from model import AppModel
 
-if __name__ == "__main__":
-    model = AppModel()
-    print("=== AppModel CLI Test ===")
-    print("Komutlar: symbol <SYM>, risk <SL> <TP>, option <EXPIRY> <STRIKE> <C/P>, order <BUY/SELL> <QTY>, show, quit")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-    while True:
-        cmd = input("> ").strip().split()
-        if not cmd:
-            continue
-        if cmd[0] == "quit":
-            break
-        elif cmd[0] == "symbol" and len(cmd) == 2:
-            price = model.set_symbol(cmd[1])
-            print(f"Symbol set: {model.symbol}, price={price}")
-        elif cmd[0] == "risk" and len(cmd) == 3:
-            sl, tp = float(cmd[1]), float(cmd[2])
-            model.set_risk(sl, tp)
-            print(f"StopLoss={sl}, TakeProfit={tp}")
-        elif cmd[0] == "option" and len(cmd) == 4:
-            expiry, strike, right = cmd[1], float(cmd[2]), cmd[3]
-            model.set_option(expiry, strike, right)
-            print(f"Option set: expiry={expiry}, strike={strike}, right={right}")
-        elif cmd[0] == "order" and len(cmd) == 3:
-            action, quantity = cmd[1].upper(), int(cmd[2])
-            order = model.place_order(action=action, quantity=quantity)
-            print(f"Order placed: {order}")
-        elif cmd[0] == "show":
-            print("State:", model.get_state())
-        else:
-            print("Geçersiz komut")
+logging.info("=== Automated AppModel Test (TSLA) ===")
+
+model = AppModel()
+
+# 1. Sembol ayarla
+price = model.set_symbol("TSLA")
+logging.info(f"Symbol set: TSLA, market price={price}")
+time.sleep(3)
+# 2. Expiry listesi al
+conid = model.get_conid("TSLA")
+expiries = model.get_maturities("TSLA")
+time.sleep(1)
+if expiries:
+    expiries = sorted(expiries)
+    #logging.info(f"All expiries ({len(expiries)} total): {expiries[:15]} ...")  # ilk 15 tanesini yaz
+    expiry = expiries[0]  # en yakın vade
+    logging.info(f"Chosen expiry: {expiry}")
+
+    # 3. Option chain çek
+    chain = model.get_option_chain("TSLA", expiry)
+    if chain:
+        strike = chain[0]["strike"]
+        right = chain[0]["right"]
+
+        logging.info(f"Testing option: expiry={expiry}, strike={strike}, right={right}")
+        model.set_option(expiry, strike, right)
+
+        # 4. Risk parametreleri
+        model.set_risk(stop_loss=4.0, take_profit=7.0)
+
+        # 5. Order
+        try:
+            order = model.place_order(action="BUY", quantity=1)
+            logging.info(f"Order placed: {order}")
+        except Exception as e:
+            logging.error(f"Order placement failed: {e}")
+    else:
+        logging.warning(f"No option chain data for expiry {expiry}")
+else:
+    logging.error("No expiries available.")

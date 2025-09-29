@@ -1,17 +1,16 @@
-# model.py
 from Services import polygon_service, tws_service
 from Services.order_wait_service import OrderWaitService
-from Helpers.order import Order, OrderState
+from Helpers.Order import Order, OrderState
 
 
 class AppModel:
     def __init__(self):
         # state
         self.symbol = None
-        self.price = None
+        self.price = None           # underlying stock price
         self.expiry = None
         self.strike = None
-        self.right = None
+        self.right = None           # always "C" or "P"
         self.stop_loss = None
         self.take_profit = None
         self.orders = []
@@ -22,128 +21,150 @@ class AppModel:
         self.polygon = polygon_service.PolygonService()
         self.waiter = OrderWaitService(self.polygon, self.tws)
 
-
-    
-        def reconnect_broker(self):
-            """Reconnect broker"""
-            try:
-                # önce varsa eski bağlantıyı kapat
-                if hasattr(self.tws, "disconnect"):
-                    self.tws.disconnect()
-                # yeniden bağlan
-                self.tws.connect_and_run()
-                return True
-            except Exception as e:
-                print(f"[AppModel] Reconnect failed: {e}")
-                return False
+    # ---------------- Connection ----------------
+    def reconnect_broker(self):
+        try:
+            if hasattr(self.tws, "disconnect"):
+                self.tws.disconnect()
+            self.tws.connect_and_run()
+            return True
+        except Exception as e:
+            print(f"[AppModel] Reconnect failed: {e}")
+            return False
 
     # ---------------- Symbol & Market ----------------
-
     def set_symbol(self, symbol: str):
-        """Sembolü seç ve son fiyatı güncelle."""
         self.symbol = symbol.upper()
         self.price = self.get_market_price()
         return self.price
 
     def get_market_price(self):
-        """Polygon’dan anlık fiyat çek."""
         if not self.symbol:
             return None
         self.price = self.polygon.get_last_trade(self.symbol)
         return self.price
 
     # ---------------- Option & Risk ----------------
-
     def set_option(self, expiry: str, strike: float, right: str):
-        """Opsiyon kontrat parametrelerini ayarla."""
+        right = right.upper()
+        if right in ("CALL", "C"):
+            self.right = "C"
+        elif right in ("PUT", "P"):
+            self.right = "P"
+        else:
+            raise ValueError("Right must be CALL/PUT or C/P")
+
+        # single retry loop here only
+        chain = None
+        for _ in range(5):
+            chain = self.get_option_chain(self.symbol, expiry)
+            if chain:
+                break
+            import time; time.sleep(1)
+
+        if not chain:
+            raise ValueError(f"No option chain data available for {expiry}")
+
+        if not any(c["strike"] == strike and c["right"] == self.right for c in chain):
+            raise ValueError(f"Invalid option: {expiry} {strike} {self.right}")
+
         self.expiry = expiry
         self.strike = strike
-        self.right = right.upper()  # "C" veya "P"
         return self.expiry, self.strike, self.right
+    
+    def get_conid(self,sym):
+        return self.tws.resolve_conid(sym)
+
 
     def set_risk(self, stop_loss: float, take_profit: float):
-        """Risk parametrelerini ayarla."""
         self.stop_loss = stop_loss
         self.take_profit = take_profit
         return self.stop_loss, self.take_profit
 
     def set_stop_loss(self, value: float):
-        """UI stop loss preset butonları için (örn: 0.20, 0.50, 1.00)."""
         self.stop_loss = value
         return self.stop_loss
 
     def set_profit_taking(self, percent: float):
-        """Profit taking yüzdesine göre TP fiyatını hesapla."""
-        if not self.price:
-            self.get_market_price()
-
-        if self.right == "CALL":
-            self.take_profit = round(self.price * (1 + percent / 100), 2)
-        elif self.right == "PUT":
-            self.take_profit = round(self.price * (1 - percent / 100), 2)
+        entry_price = self.get_option_price(self.expiry, self.strike, self.right)
+        if not entry_price:
+            return None
+        self.take_profit = round(entry_price * (1 + percent / 100), 2)
         return self.take_profit
 
     def set_breakeven(self):
-        """Stop loss’u entry price’a eşitle (breakeven)."""
-        if self.price:
-            self.stop_loss = self.price
+        entry_price = self.get_option_price(self.expiry, self.strike, self.right)
+        if entry_price:
+            self.stop_loss = entry_price
         return self.stop_loss
 
     def calculate_quantity(self, position_size: float, price: float = None):
-        """Pozisyon büyüklüğüne göre lot hesabı yap (UI: 5K/10K/25K butonları)."""
         if price is None:
-            price = self.get_market_price()
+            price = self.get_option_price(self.expiry, self.strike, self.right)
         if not price or price <= 0:
             return 0
-        qty = int(position_size // price)
-        return qty
+        return int(position_size // price)
+
+    # ---------------- Options Data via TWS ----------------
+    def get_maturities(self, symbol: str):
+        # one-shot call, no retry here
+        expiries = self.tws.get_maturities(symbol)
+        return sorted(expiries) if expiries else []
+
+    def get_option_chain(self, symbol: str, expiry: str):
+        # one-shot call, no retry here
+        return self.tws.get_option_chain(symbol, expiry=expiry) or []
+
+    def get_option_price(self, expiry: str, strike: float, right: str):
+        chain = self.get_option_chain(self.symbol, expiry)
+        for c in chain:
+            if c["strike"] == strike and c["right"] == right:
+                price = c.get("marketPrice") or c.get("bid") or c.get("ask")
+                if price and price > 0:
+                    return price
+                else:
+                    raise ValueError(f"No valid price for {expiry} {strike} {right}")
+        raise ValueError(f"Option {expiry} {strike} {right} not found")
 
     # ---------------- Orders ----------------
-
     def place_order(self, action="BUY", quantity=1, trigger=None):
-        """Order yarat, trigger varsa pending’e at, yoksa anında TWS’e gönder."""
         if not self.symbol or not self.expiry or not self.strike or not self.right:
             raise ValueError("Option parameters (symbol/expiry/strike/right) not set")
 
-        # yeni order nesnesi
+        self.price = self.get_market_price()
+        entry_price = self.get_option_price(self.expiry, self.strike, self.right)
+        if not entry_price:
+            raise ValueError("Option contract not found in chain")
+
+        if self.stop_loss is None:
+            self.stop_loss = round(entry_price * 0.8, 2)
+        if self.take_profit is None:
+            self.take_profit = round(entry_price * 1.2, 2)
+
         order = Order(
             symbol=self.symbol,
             expiry=self.expiry,
             strike=self.strike,
             right=self.right,
             qty=quantity,
-            entry_price=self.price,
+            entry_price=entry_price,
             tp_price=self.take_profit,
             sl_price=self.stop_loss,
             action=action,
             trigger=trigger
         )
 
-        # trigger check
         if order.trigger is None or order.is_triggered(self.price):
-            # direkt TWS’e gönder
-            result = self.tws.place_bracket_order(
-                symbol=order.symbol,
-                expiry=order.expiry,
-                strike=order.strike,
-                right=order.right,
-                action=order.action,
-                quantity=order.qty,
-                entry_price=order.entry_price,
-                take_profit_price=order.tp_price,
-                stop_loss_price=order.sl_price
-            )
+            result = self.tws.place_bracket_order(order)
             order.mark_active(result)
         else:
-            # pending’e at
-            self.waiter.add_order(order.to_dict())
+            self.waiter.add_order(order)
             order.state = OrderState.PENDING
 
         self.orders.append(order)
         return order.to_dict()
 
     def cancel_order(self, order_id: str):
-        """Order’ı iptal et (pending ise queue’dan siler)."""
         for o in self.orders:
             if o.order_id == order_id and o.state == OrderState.PENDING:
                 self.waiter.cancel_order(order_id)
@@ -152,7 +173,6 @@ class AppModel:
         return False
 
     def invalidate(self):
-        """Model’deki tüm geçerli parametreleri temizle (UI: Invalidate)."""
         self.symbol = None
         self.price = None
         self.expiry = None
@@ -163,13 +183,11 @@ class AppModel:
         return True
 
     def list_orders(self, state: str = None):
-        """Order listesini getir (opsiyonel state filtresiyle)."""
         if state:
             return [o.to_dict() for o in self.orders if o.state.value == state]
         return [o.to_dict() for o in self.orders]
 
     def update_order(self, order_id: str, tp_price=None, sl_price=None):
-        """Mevcut order üzerinde TP/SL güncelle."""
         for o in self.orders:
             if o.order_id == order_id:
                 if tp_price is not None:
@@ -179,10 +197,7 @@ class AppModel:
                 return o.to_dict()
         return None
 
-    # ---------------- State ----------------
-
     def get_state(self):
-        """Şu anki app state’i döndür."""
         return {
             "symbol": self.symbol,
             "price": self.price,
