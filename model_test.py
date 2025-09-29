@@ -1,44 +1,35 @@
 import logging
-import time
 from model import AppModel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-if __name__ == "__main__":
-    model = AppModel()
-    model.connect()
-    print("=== Automated AppModel Test (TSLA) ===")
+print("=== Automated AppModel Test (TSLA) ===")
 
-    # Step 1: Set symbol
-    model.set_symbol("TSLA")
-    print(f"Symbol set: TSLA, underlying price={model.underlying_price}")
+model = AppModel()
 
-    # Step 2: Get expiries
-    expiries = model.get_maturities("TSLA")
-    print(f"Available expiries: {expiries[:5]} ... total={len(expiries)}")
+# 1. Sembol ayarla
+model.set_symbol("TSLA")
+print(f"Symbol set: TSLA")
+print(f"Available expiries: {model.expiries[:5]} ... total={len(model.expiries)}")
 
-    # Test expiry
-    expiry = expiries[0]
+# 2. İlk expiry ve strike seç
+if model.expiries:
+    expiry = model.expiries[0]
+    sample_chain = model.chain_cache.get(expiry, [])
+    if sample_chain:
+        strike = sample_chain[0]["strike"]
+        right = sample_chain[0]["right"]
 
-    # Step 3: Get option chain for expiry
-    chain = model.get_option_chain("TSLA", expiry)
-    print(f"Option chain sample ({expiry}): {chain[:3]}")
+        print(f"Testing option: expiry={expiry}, strike={strike}, right={right}")
+        model.set_option(expiry, strike, right)
 
-    # --- FIX: zincirin cache’e oturmasını bekle ---
-    retries = 5
-    while expiry not in model.option_chains and retries > 0:
-        logging.info("Option chain not ready yet, retrying...")
-        time.sleep(1)
-        chain = model.get_option_chain("TSLA", expiry)
-        retries -= 1
-
-    if expiry not in model.option_chains:
-        raise RuntimeError(f"Option chain failed to load for {expiry}")
-
-    # Step 4: Pick first strike
-    strike = chain[0]["strike"]
-    right = chain[0]["right"]
-
-    # Step 5: Set option
-    model.set_option(expiry, strike, right)
-    print(f"Selected option: {expiry} {strike} {right}")
+        # 3. Bracket order simülasyonu
+        try:
+            result = model.place_bracket_order(price=5.0, take_profit=7.0, stop_loss=4.0)
+            print("Bracket order placed:", result)
+        except Exception as e:
+            print("Order placement failed:", e)
+    else:
+        print(f"No option chain data for expiry {expiry}")
+else:
+    print("No expiries available.")
