@@ -16,22 +16,24 @@ class OrderWaitService:
         self.lock = threading.Lock()
 
     def add_order(self, order: Order) -> str:
-        """
-        Add a new Order to the wait service.
-        Subscribes to Polygon live feed for the symbol.
-        """
         order_id = order.order_id
         with self.lock:
             self.pending_orders[order_id] = order
 
-        # Subscribe to Polygon ticks for this symbol
-        # Every tick triggers _on_tick(order, price)
+        # ✅ IMMEDIATE TRIGGER CHECK - Execute immediately if condition already met
+        current_price = self.polygon.get_last_trade(order.symbol)
+        if current_price and order.is_triggered(current_price):
+            logging.info(f"[WaitService] 🚨 TRIGGER ALREADY MET! Executing immediately. Current: {current_price}, Trigger: {order.trigger}")
+            self._finalize_order(order_id, order)
+            return order_id
+
+        # Only subscribe if trigger not already met
         self.polygon.subscribe(
             order.symbol,
             lambda price, oid=order_id: self._on_tick(oid, price)
         )
 
-        msg = f"[WaitService] Order added {order_id} (waiting for trigger {order.trigger})"
+        msg = f"[WaitService] Order added {order_id} (waiting for trigger {order.trigger}, current: {current_price})"
         logging.info(msg)
         return order_id
 

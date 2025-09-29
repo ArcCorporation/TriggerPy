@@ -270,26 +270,36 @@ class TWSService(EWrapper, EClient):
 
     def place_custom_order(self, custom_order, account: str = "") -> bool:
         """
-        Place an order using Helpers.Order object
-        
-        Args:
-            custom_order: Your Helpers.Order instance
-            account: IB account number
+        Place an order using your custom Order object from Helpers.Order.
         """
         if not self.is_connected():
-            logger.error("Not connected to TWS")
+            logger.error(f"Cannot place order: Not connected to TWS")
             return False
 
         try:
-            # Convert to IB contract
+            # Convert your custom order to IB contract
+            ib_right = "C" if custom_order.right.upper() in ["C", "CALL"] else "P"
+            
             contract = self.create_option_contract(
                 symbol=custom_order.symbol,
                 last_trade_date=custom_order.expiry,
                 strike=custom_order.strike,
-                right=custom_order.right
+                right=ib_right,
+                exchange="SMART",
+                currency="USD"
             )
 
-            # Convert to IB order using your existing to_ib_order method
+            # ✅ RESOLVE CONTRACT FIRST to avoid error 200
+            conid = self.resolve_conid(contract)
+            if not conid:
+                logger.error(f"Could not resolve contract for {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right}")
+                custom_order.mark_failed("Contract resolution failed")
+                return False
+
+            # Use resolved contract
+            contract.conId = conid
+
+            # Convert your custom order to IB order
             ib_order = custom_order.to_ib_order(
                 order_type="LMT",
                 limit_price=custom_order.entry_price,
@@ -297,21 +307,23 @@ class TWSService(EWrapper, EClient):
             )
             ib_order.account = account
 
-            # Track the order
+            # Store the custom order for tracking
             self._pending_orders[custom_order.order_id] = custom_order
             
-            # Place order
+            # Place the order with IB
             order_id = self.next_valid_order_id
             custom_order._ib_order_id = order_id
             
             self.placeOrder(order_id, contract, ib_order)
             
-            logger.info(f"Placed order: {custom_order.order_id} -> IB ID: {order_id}")
+            logger.info(f"Placed custom order: {custom_order.order_id} -> IB ID: {order_id}")
+            
+            # Increment order ID for next use
             self.next_valid_order_id += 1
             return True
             
         except Exception as e:
-            logger.error(f"Failed to place order {custom_order.order_id}: {str(e)}")
+            logger.error(f"Failed to place custom order {custom_order.order_id}: {str(e)}")
             custom_order.mark_failed(reason=str(e))
             return False
 
@@ -326,6 +338,14 @@ class TWSService(EWrapper, EClient):
                 return True
         return False
 
+    def get_order_status(self, custom_order_id: str) -> Optional[Dict]:
+        """
+        Get the status of a custom order.
+        """
+        if custom_order_id in self._pending_orders:
+            order = self._pending_orders[custom_order_id]
+            return order.to_dict()
+        return None
     def disconnect_gracefully(self):
         logger.info("Disconnecting from TWS...")
         self.connection_ready.clear()
