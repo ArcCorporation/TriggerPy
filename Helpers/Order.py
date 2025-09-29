@@ -39,9 +39,9 @@ class Order:
         if self.trigger is None:
             return True
         if self.right == "CALL":
-            return market_price >= self.trigger
+            return market_price > self.trigger
         elif self.right == "PUT":
-            return market_price <= self.trigger
+            return market_price < self.trigger
         return False
 
     def mark_active(self, result=None):
