@@ -1,7 +1,7 @@
-# model.py
 from Services import polygon_service, tws_service
 from Services.order_wait_service import OrderWaitService
 from Helpers.Order import Order, OrderState
+import time
 
 
 class AppModel:
@@ -47,7 +47,7 @@ class AppModel:
 
     # ---------------- Option & Risk ----------------
     def set_option(self, expiry: str, strike: float, right: str):
-    # normalize right
+        # normalize right
         right = right.upper()
         if right in ("CALL", "C"):
             self.right = "C"
@@ -62,7 +62,7 @@ class AppModel:
             chain = self.get_option_chain(self.symbol, expiry)
             if chain:
                 break
-            import time; time.sleep(1)
+            time.sleep(1)
 
         if not chain:
             raise ValueError(f"No option chain data available for {expiry}")
@@ -73,7 +73,6 @@ class AppModel:
         self.expiry = expiry
         self.strike = strike
         return self.expiry, self.strike, self.right
-
 
     def set_risk(self, stop_loss: float, take_profit: float):
         self.stop_loss = stop_loss
@@ -88,10 +87,7 @@ class AppModel:
         entry_price = self.get_option_price(self.expiry, self.strike, self.right)
         if not entry_price:
             return None
-        if self.right == "C":
-            self.take_profit = round(entry_price * (1 + percent / 100), 2)
-        elif self.right == "P":
-            self.take_profit = round(entry_price * (1 + percent / 100), 2)
+        self.take_profit = round(entry_price * (1 + percent / 100), 2)
         return self.take_profit
 
     def set_breakeven(self):
@@ -109,11 +105,22 @@ class AppModel:
 
     # ---------------- Options Data via TWS ----------------
     def get_maturities(self, symbol: str):
-        expiries = self.tws.get_maturities(symbol)
+        expiries = []
+        for _ in range(5):  # retry up to 5 seconds
+            expiries = self.tws.get_maturities(symbol)
+            if expiries:
+                break
+            time.sleep(1)
         return sorted(expiries) if expiries else []
 
     def get_option_chain(self, symbol: str, expiry: str):
-        return self.tws.get_option_chain(symbol, expiry=expiry) or []
+        chain = []
+        for _ in range(5):
+            chain = self.tws.get_option_chain(symbol, expiry=expiry) or []
+            if chain:
+                break
+            time.sleep(1)
+        return chain
 
     def get_option_price(self, expiry: str, strike: float, right: str):
         """
@@ -122,19 +129,30 @@ class AppModel:
         chain = self.get_option_chain(self.symbol, expiry)
         for c in chain:
             if c["strike"] == strike and c["right"] == right:
-                # IBKR contractDetails doesn’t give bid/ask directly
-                # so fall back to strike/right for now
-                return c.get("marketPrice") or c.get("bid") or c.get("ask") or 1.0
-        return None
+                price = c.get("marketPrice") or c.get("bid") or c.get("ask")
+                if price and price > 0:
+                    return price
+                else:
+                    raise ValueError(f"No valid price for {expiry} {strike} {right}")
+        raise ValueError(f"Option {expiry} {strike} {right} not found")
 
     # ---------------- Orders ----------------
     def place_order(self, action="BUY", quantity=1, trigger=None):
         if not self.symbol or not self.expiry or not self.strike or not self.right:
             raise ValueError("Option parameters (symbol/expiry/strike/right) not set")
 
+        # her seferinde güncel fiyat çek
+        self.price = self.get_market_price()
+
         entry_price = self.get_option_price(self.expiry, self.strike, self.right)
         if not entry_price:
             raise ValueError("Option contract not found in chain")
+
+        # stop/TP set edilmediyse default ata
+        if self.stop_loss is None:
+            self.stop_loss = round(entry_price * 0.8, 2)
+        if self.take_profit is None:
+            self.take_profit = round(entry_price * 1.2, 2)
 
         order = Order(
             symbol=self.symbol,

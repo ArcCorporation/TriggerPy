@@ -98,11 +98,17 @@ class TWSService(EWrapper, EClient):
     def get_maturities(self, symbol: str):
         conId = self.conid_map.get(symbol)
         if not conId:
-            conId = self.resolve_conid(symbol, secType="OPT")
+            # önce underlying STK conId çöz
+            conId = self.resolve_conid(symbol, secType="STK")
         if not conId:
             logging.warning(f"No conId for {symbol}")
             return []
+
+        req_id = self._next_req_id()
+        self.reqSecDefOptParams(req_id, symbol, "", "STK", conId)
+        time.sleep(2)
         return self.contract_maturities.get(symbol, [])
+
 
     def get_option_chain(self, symbol: str, expiry: str, reqId: int = None):
         if reqId is None:
