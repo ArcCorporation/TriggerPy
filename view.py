@@ -102,40 +102,41 @@ class OrderFrame(tk.Frame):
 
     def on_symbol_selected(self, event=None):
         selection = self.combo_symbol.get()
-        logging.info(f"[GUI] Symbol selected: {selection}")
         if not selection:
             return
-
         symbol = selection.split(" - ")[0]
+        logging.info(f"[GUI] Symbol selected: {symbol}")
+
         try:
+            # 1) Market snapshot from Polygon
             snap = self.model.polygon.get_snapshot(symbol)
             if snap and "last" in snap:
                 current_price = float(snap["last"])
                 self.update_price(current_price)
 
-                # Strike = market price
+                # 2) Auto-fill defaults
                 self.entry_strike.delete(0, tk.END)
                 self.entry_strike.insert(0, f"{current_price:.2f}")
-
-                # Qty = 1
                 self.entry_qty.delete(0, tk.END)
                 self.entry_qty.insert(0, "1")
-
-                # StopLoss = 0
                 self.entry_sl.delete(0, tk.END)
                 self.entry_sl.insert(0, "0")
-
-                # Profit % = 0
                 self.entry_tp.delete(0, tk.END)
                 self.entry_tp.insert(0, "0")
-
-                # Offset = 0
                 self.entry_offset.delete(0, tk.END)
                 self.entry_offset.insert(0, "0")
-
                 logging.info("[GUI] Auto-fill defaults applied")
+
+            # 3) Fetch maturity via Model (TWS)
+            maturity = self.model.get_maturity(symbol)
+            if maturity:
+                self.entry_maturity.delete(0, tk.END)
+                self.entry_maturity.insert(0, maturity)
+                logging.info(f"[GUI] Maturity set to {maturity}")
+
         except Exception as e:
-            logging.error(f"[UI] Price fetch error: {e}")
+            logging.error(f"[UI] on_symbol_selected error: {e}")
+
 
 
 

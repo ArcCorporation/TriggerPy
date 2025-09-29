@@ -1,61 +1,46 @@
+# Services/tws_service.py
+import time
+import logging
+from threading import Thread
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
-from ibapi.order import Order as IBOrder
-import threading
-import time
-import random
-import logging
-from Services.Order import Order
 
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 
 class TWSService(EWrapper, EClient):
     def __init__(self):
         EClient.__init__(self, self)
-        self.nextOrderId = None
-        self.symbol_samples = {}
-        self.contract_details = {}
 
-    # --- Connection / Lifecycle ---
-    def connect_and_run(self, host="127.0.0.1", port=7497, client_id=1):
-        id = random.randint(1, 10000)
-        try:
-            self.connect(host, port, id)
-        except Exception:
-            logging.debug("connection erroe")
-        thread = threading.Thread(target=self.run, daemon=True)
+        self.nextOrderId = None
+        self.req_id = 9000
+
+        # storage
+        self.search_results = {}
+        self.contract_details = {}
+        self.contract_maturities = {}
+        self.resolved_conids = {}
+
+    # -------------------- Connection --------------------
+    def connect_and_run(self, host="127.0.0.1", port=7497, client_id=9102):
+        self.connect(host, port, clientId=client_id)
+        thread = Thread(target=self.run, daemon=True)
         thread.start()
         time.sleep(1)
+        logging.info("Connected to TWS")
 
     def nextValidId(self, orderId: int):
+        super().nextValidId(orderId)
         self.nextOrderId = orderId
+        logging.info(f"NextValidId set: {orderId}")
 
-    
-
-    def get_contract_details(self, symbol: str, secType: str = "OPT", exchange: str = "SMART",
-                         currency: str = "USD", reqId: int = 9201):
-        c = Contract()
-        c.symbol = symbol
-        c.secType = secType
-        c.exchange = exchange
-        c.currency = currency
-        self.reqContractDetails(reqId, c)
-        time.sleep(2)
-        return self.contract_details.get(reqId, [])
-
-
-    def error(self, reqId, errorCode, errorString):
-        # suppress IB spam (only show real errors)
-        if errorCode < 2000:
-            print(f"[Error] reqId={reqId}, code={errorCode}, msg={errorString}")
-
-    # --- Symbol Search ---
-    def symbolSamples(self, reqId, contractDescriptions):
-        results = []
+    # -------------------- Symbol Search --------------------
+    def symbolSamples(self, reqId: int, contractDescriptions):
+        self.search_results[reqId] = []
         for desc in contractDescriptions:
             c = desc.contract
-            results.append({
+            self.search_results[reqId].append({
                 "symbol": c.symbol,
                 "secType": c.secType,
                 "currency": c.currency,
@@ -63,135 +48,140 @@ class TWSService(EWrapper, EClient):
                 "primaryExchange": c.primaryExchange,
                 "description": desc.derivativeSecTypes
             })
-        self.symbol_samples[reqId] = results
 
-    def search_symbol(self, name: str, reqId: int = 9001):
-        self.reqMatchingSymbols(reqId, name)
-        time.sleep(2)
-        return self.symbol_samples.get(reqId, [])
+    def search_symbol(self, pattern: str):
+        self.req_id += 1
+        req_id = self.req_id
+        self.reqMatchingSymbols(req_id, pattern)
+        for _ in range(50):  # ~5s
+            if req_id in self.search_results:
+                return self.search_results[req_id]
+            time.sleep(0.1)
+        return []
 
-    # --- Option Chain Fetch ---
+    # -------------------- Contract Details --------------------
     def contractDetails(self, reqId, contractDetails):
-        cd = contractDetails.contract
+        c = contractDetails.contract
+        expiry = c.lastTradeDateOrContractMonth
+        symbol = c.symbol
+
+        # store contract detail
         if reqId not in self.contract_details:
             self.contract_details[reqId] = []
         self.contract_details[reqId].append({
-            "symbol": cd.symbol,
-            "expiry": cd.lastTradeDateOrContractMonth,
-            "strike": cd.strike,
-            "right": cd.right,
-            "exchange": cd.exchange,
-            "currency": cd.currency
+            "symbol": c.symbol,
+            "expiry": expiry,
+            "strike": c.strike,
+            "right": c.right,
+            "exchange": c.exchange,
+            "currency": c.currency,
+            "conId": c.conId,
         })
 
-    def get_option_chain(self, symbol: str, reqId: int = 9101, expiry: str = None):
+        # store maturities
+        if symbol not in self.contract_maturities:
+            self.contract_maturities[symbol] = []
+        if expiry and expiry not in self.contract_maturities[symbol]:
+            self.contract_maturities[symbol].append(expiry)
+
+    def contractDetailsEnd(self, reqId: int):
+        logging.info(f"contractDetailsEnd for reqId {reqId}")
+
+    # -------------------- Resolution Helpers --------------------
+    def resolve_conid(self, symbol: str):
+        """Resolve a stock symbol to conId (for option chains)."""
+        if symbol in self.resolved_conids:
+            return self.resolved_conids[symbol]
+
+        self.req_id += 1
+        req_id = self.req_id
+
+        c = Contract()
+        c.symbol = symbol
+        c.secType = "STK"
+        c.exchange = "SMART"
+        c.currency = "USD"
+
+        self.contract_details[req_id] = []
+        self.reqContractDetails(req_id, c)
+
+        for _ in range(50):
+            if self.contract_details[req_id]:
+                conid = self.contract_details[req_id][0]["conId"]
+                self.resolved_conids[symbol] = conid
+                return conid
+            time.sleep(0.1)
+        return None
+
+    def get_maturities(self, symbol: str):
+        """Fetch option expiries for a given stock symbol."""
+        conid = self.resolve_conid(symbol)
+        if not conid:
+            logging.error(f"Could not resolve conId for {symbol}")
+            return []
+
+        self.req_id += 1
+        req_id = self.req_id
+
         c = Contract()
         c.symbol = symbol
         c.secType = "OPT"
         c.exchange = "SMART"
         c.currency = "USD"
-        if expiry:
-            c.lastTradeDateOrContractMonth = expiry
-        self.reqContractDetails(reqId, c)
-        time.sleep(2)
-        return self.contract_details.get(reqId, [])
+        c.underConId = conid  # critical for IBKR option chain
 
-    # --- Contract Builder ---
-    def option_contract(self, symbol, expiry, strike, right,
-                        exchange="SMART", currency="USD"):
+        self.contract_details[req_id] = []
+        self.reqContractDetails(req_id, c)
+
+        for _ in range(50):  # ~5s
+            if symbol in self.contract_maturities and self.contract_maturities[symbol]:
+                return sorted(self.contract_maturities[symbol])
+            time.sleep(0.1)
+
+        return []
+
+    def get_option_chain(self, symbol: str, expiry: str):
+        """Fetch strikes/rights for a given expiry."""
+        conid = self.resolve_conid(symbol)
+        if not conid:
+            logging.error(f"Could not resolve conId for {symbol}")
+            return []
+
+        self.req_id += 1
+        req_id = self.req_id
+
         c = Contract()
         c.symbol = symbol
         c.secType = "OPT"
-        c.exchange = exchange
-        c.currency = currency
+        c.exchange = "SMART"
+        c.currency = "USD"
+        c.underConId = conid
         c.lastTradeDateOrContractMonth = expiry
-        c.strike = float(strike)
-        c.right = right
-        c.multiplier = "100"
-        return c
 
-    # --- Place Bracket Order (Options) ---
-    def place_bracket_order(self, order: Order):
-        if self.nextOrderId is None:
-            raise Exception("NextValidId not received, call connect_and_run() first")
+        self.contract_details[req_id] = []
+        self.reqContractDetails(req_id, c)
 
-        parent_id = self.nextOrderId
-        self.nextOrderId += 1
-
-        contract = self.option_contract(order.symbol, order.expiry, order.strike, order.right)
-
-        # Parent: limit entry
-        parent = order.to_ib_order(
-            order_type="LMT",
-            limit_price=order.entry_price,
-            parent_id=None,
-            transmit=False
-        )
-        parent.orderId = parent_id
-
-        # Take Profit: opposite side, limit
-        tp = order.to_ib_order(
-            action="SELL" if order.action == "BUY" else "BUY",
-            order_type="LMT",
-            limit_price=order.tp_price,
-            parent_id=parent_id,
-            transmit=False
-        )
-        tp.orderId = self.nextOrderId
-        self.nextOrderId += 1
-
-        # Stop Loss: opposite side, stop
-        sl = order.to_ib_order(
-            action="SELL" if order.action == "BUY" else "BUY",
-            order_type="STP",
-            stop_price=order.sl_price,
-            parent_id=parent_id,
-            transmit=True
-        )
-        sl.orderId = self.nextOrderId
-        self.nextOrderId += 1
-
-        # Place all 3 orders
-        self.placeOrder(parent.orderId, contract, parent)
-        self.placeOrder(tp.orderId, contract, tp)
-        self.placeOrder(sl.orderId, contract, sl)
-
-        result = {
-            "parent": parent.orderId,
-            "take_profit": tp.orderId,
-            "stop_loss": sl.orderId
-        }
-
-        order.mark_active(result)
-        return result
+        for _ in range(50):
+            if self.contract_details[req_id]:
+                return self.contract_details[req_id]
+            time.sleep(0.1)
+        return []
 
 
-# --- Example CLI Run ---
+# -------------------- Test Main --------------------
 if __name__ == "__main__":
-
-
     tws = TWSService()
     tws.connect_and_run()
 
     syms = tws.search_symbol("TSLA")
     print("Search result:", syms[:3])
 
-    chain = tws.get_option_chain("TSLA", expiry="20250926")
-    print("Chain sample:", chain[:3])
+    conid = tws.resolve_conid("TSLA")
+    print("Resolved conId:", conid)
 
-    if chain:
-        my_order = Order(
-            symbol="TSLA",
-            expiry=chain[0]["expiry"],
-            strike=chain[0]["strike"],
-            right=chain[0]["right"],
-            qty=1,
-            entry_price=5.0,
-            tp_price=7.0,
-            sl_price=4.0,
-            action="BUY"
-        )
-        order_ids = tws.place_bracket_order(my_order)
-        print("Placed bracket:", order_ids)
+    maturities = tws.get_maturities("TSLA")
+    print("Available expiries:", maturities[:5])
 
-    time.sleep(5)
+    if maturities:
+        chain = tws.get_option_chain("TSLA", expiry=maturities[0])
+        print("Chain sample:", chain[:3])
