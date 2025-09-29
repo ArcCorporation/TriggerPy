@@ -1,210 +1,301 @@
-from Services import polygon_service, tws_service
+# model.py - COMPLETE VERSION
+import logging
+from Services.polygon_service import PolygonService
+from Services.tws_service import create_tws_service
 from Services.order_wait_service import OrderWaitService
 from Helpers.Order import Order, OrderState
-
+from typing import List, Dict, Optional, Tuple
 
 class AppModel:
+    """
+    MVC Model - Pure data and business logic
+    """
     def __init__(self):
-        # state
-        self.symbol = None
-        self.price = None           # underlying stock price
-        self.expiry = None
-        self.strike = None
-        self.right = None           # always "C" or "P"
-        self.stop_loss = None
-        self.take_profit = None
-        self.orders = []
+        # Application state
+        self._symbol: Optional[str] = None
+        self._underlying_price: Optional[float] = None
+        self._expiry: Optional[str] = None
+        self._strike: Optional[float] = None
+        self._right: Optional[str] = None
+        self._stop_loss: Optional[float] = None
+        self._take_profit: Optional[float] = None
+        self._orders: List[Order] = []
+        
+        # Service layer
+        self._tws_service = create_tws_service()
+        self._polygon_service = PolygonService()
+        self._order_wait_service = OrderWaitService(self._polygon_service, self._tws_service)
+        
+        self._connected = False
 
-        # services
-        self.tws = tws_service.TWSService()
-        self.tws.connect_and_run()
-        self.polygon = polygon_service.PolygonService()
-        self.waiter = OrderWaitService(self.polygon, self.tws)
-
-    # ---------------- Connection ----------------
-    def reconnect_broker(self):
+    # ==================== CONNECTION MANAGEMENT ====================
+    def connect_services(self) -> bool:
         try:
-            if hasattr(self.tws, "disconnect"):
-                self.tws.disconnect()
-            self.tws.connect_and_run()
-            return True
+            if self._tws_service.connect_and_start():
+                self._connected = True
+                logging.info("AppModel: Services connected successfully")
+                return True
+            else:
+                logging.error("AppModel: Failed to connect to TWS")
+                return False
         except Exception as e:
-            print(f"[AppModel] Reconnect failed: {e}")
+            logging.error(f"AppModel: Connection failed: {e}")
             return False
 
-    # ---------------- Symbol & Market ----------------
-    def set_symbol(self, symbol: str):
-        self.symbol = symbol.upper()
-        self.price = self.get_market_price()
-        return self.price
+    def disconnect_services(self):
+        try:
+            self._tws_service.disconnect_gracefully()
+            self._connected = False
+            logging.info("AppModel: Services disconnected")
+        except Exception as e:
+            logging.error(f"AppModel: Disconnection error: {e}")
 
-    def get_market_price(self):
-        if not self.symbol:
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+    # ==================== SYMBOL & MARKET DATA ====================
+    @property
+    def symbol(self) -> Optional[str]:
+        return self._symbol
+
+    @symbol.setter
+    def symbol(self, value: str):
+        self._symbol = value.upper() if value else None
+
+    @property
+    def underlying_price(self) -> Optional[float]:
+        return self._underlying_price
+
+    def refresh_market_price(self) -> Optional[float]:
+        if not self._symbol:
             return None
-        self.price = self.polygon.get_last_trade(self.symbol)
-        return self.price
+        try:
+            self._underlying_price = self._polygon_service.get_last_trade(self._symbol)
+            logging.info(f"AppModel: Market price for {self._symbol}: {self._underlying_price}")
+            return self._underlying_price
+        except Exception as e:
+            logging.error(f"AppModel: Failed to get market price for {self._symbol}: {e}")
+            return None
 
-    # ---------------- Option & Risk ----------------
-    def set_option(self, expiry: str, strike: float, right: str):
+    # ==================== OPTION CONTRACT MANAGEMENT ====================
+    @property
+    def expiry(self) -> Optional[str]:
+        return self._expiry
+
+    @property
+    def strike(self) -> Optional[float]:
+        return self._strike
+
+    @property
+    def right(self) -> Optional[str]:
+        return self._right
+
+    def set_option_contract(self, expiry: str, strike: float, right: str) -> Tuple[str, float, str]:
         right = right.upper()
         if right in ("CALL", "C"):
-            self.right = "C"
+            self._right = "C"
         elif right in ("PUT", "P"):
-            self.right = "P"
+            self._right = "P"
         else:
             raise ValueError("Right must be CALL/PUT or C/P")
 
-        # single retry loop here only
-        chain = None
-        for _ in range(5):
-            chain = self.get_option_chain(self.symbol, expiry)
-            if chain:
-                break
-            import time; time.sleep(1)
+        if not self._validate_option_contract(expiry, strike, self._right):
+            raise ValueError(f"Invalid option contract: {expiry} {strike} {self._right}")
 
-        if not chain:
-            raise ValueError(f"No option chain data available for {expiry}")
+        self._expiry = expiry
+        self._strike = strike
+        logging.info(f"AppModel: Option contract set: {self._symbol} {expiry} {strike}{self._right}")
+        return self._expiry, self._strike, self._right
 
-        if not any(c["strike"] == strike and c["right"] == self.right for c in chain):
-            raise ValueError(f"Invalid option: {expiry} {strike} {self.right}")
+    def _validate_option_contract(self, expiry: str, strike: float, right: str) -> bool:
+        try:
+            maturities = self._tws_service.get_maturities(self._symbol)
+            if not maturities:
+                return False
+            expirations = list(maturities['expirations'])
+            if expiry not in expirations:
+                return False
+            strikes = list(maturities['strikes'])
+            return strike in strikes
+        except Exception as e:
+            logging.error(f"AppModel: Contract validation failed: {e}")
+            return False
 
-        self.expiry = expiry
-        self.strike = strike
-        return self.expiry, self.strike, self.right
-    
-    def get_conid(self,sym):
-        return self.tws.resolve_conid(sym)
+    def get_available_maturities(self) -> List[str]:
+        if not self._symbol:
+            return []
+        try:
+            maturities = self._tws_service.get_maturities(self._symbol)
+            if maturities:
+                expirations = sorted(list(maturities['expirations']))
+                logging.info(f"AppModel: Found {len(expirations)} expirations for {self._symbol}")
+                return expirations
+            return []
+        except Exception as e:
+            logging.error(f"AppModel: Failed to get maturities: {e}")
+            return []
 
+    def get_available_strikes(self, expiry: str) -> List[float]:
+        if not self._symbol:
+            return []
+        try:
+            maturities = self._tws_service.get_maturities(self._symbol)
+            if maturities and expiry in maturities['expirations']:
+                strikes = sorted(list(maturities['strikes']))
+                logging.info(f"AppModel: Found {len(strikes)} strikes for {expiry}")
+                return strikes
+            return []
+        except Exception as e:
+            logging.error(f"AppModel: Failed to get strikes: {e}")
+            return []
 
-    def set_risk(self, stop_loss: float, take_profit: float):
-        self.stop_loss = stop_loss
-        self.take_profit = take_profit
-        return self.stop_loss, self.take_profit
+    # ==================== RISK MANAGEMENT ====================
+    @property
+    def stop_loss(self) -> Optional[float]:
+        return self._stop_loss
 
-    def set_stop_loss(self, value: float):
-        self.stop_loss = value
-        return self.stop_loss
+    @stop_loss.setter
+    def stop_loss(self, value: float):
+        if value and value > 0:
+            self._stop_loss = value
+            logging.info(f"AppModel: Stop loss set to {value}")
 
-    def set_profit_taking(self, percent: float):
-        entry_price = self.get_option_price(self.expiry, self.strike, self.right)
-        if not entry_price:
-            return None
-        self.take_profit = round(entry_price * (1 + percent / 100), 2)
-        return self.take_profit
+    @property
+    def take_profit(self) -> Optional[float]:
+        return self._take_profit
 
-    def set_breakeven(self):
-        entry_price = self.get_option_price(self.expiry, self.strike, self.right)
-        if entry_price:
-            self.stop_loss = entry_price
-        return self.stop_loss
+    @take_profit.setter
+    def take_profit(self, value: float):
+        if value and value > 0:
+            self._take_profit = value
+            logging.info(f"AppModel: Take profit set to {value}")
 
-    def calculate_quantity(self, position_size: float, price: float = None):
-        if price is None:
-            price = self.get_option_price(self.expiry, self.strike, self.right)
-        if not price or price <= 0:
+    def calculate_position_size(self, risk_amount: float, entry_price: float) -> int:
+        if not entry_price or entry_price <= 0:
             return 0
-        return int(position_size // price)
+        quantity = max(1, int(risk_amount / entry_price))
+        logging.info(f"AppModel: Calculated position size: {quantity} contracts")
+        return quantity
 
-    # ---------------- Options Data via TWS ----------------
-    def get_maturities(self, symbol: str):
-        # one-shot call, no retry here
-        expiries = self.tws.get_maturities(symbol)
-        return sorted(expiries) if expiries else []
+    def auto_calculate_risk(self, entry_price: float, risk_percent: float = 20) -> Tuple[float, float]:
+        if not entry_price or entry_price <= 0:
+            return None, None
+        self._stop_loss = round(entry_price * (1 - risk_percent / 100), 2)
+        self._take_profit = round(entry_price * (1 + risk_percent / 100), 2)
+        logging.info(f"AppModel: Auto risk calculated - SL: {self._stop_loss}, TP: {self._take_profit}")
+        return self._stop_loss, self._take_profit
 
-    def get_option_chain(self, symbol: str, expiry: str):
-        # one-shot call, no retry here
-        return self.tws.get_option_chain(symbol, expiry=expiry) or []
+    # ==================== ORDER MANAGEMENT ====================
+    def place_option_order(self, action: str = "BUY", quantity: int = 1, 
+                          trigger_price: Optional[float] = None) -> Dict:
+        if not all([self._symbol, self._expiry, self._strike, self._right]):
+            raise ValueError("Option parameters not set (symbol, expiry, strike, right)")
 
-    def get_option_price(self, expiry: str, strike: float, right: str):
-        chain = self.get_option_chain(self.symbol, expiry)
-        for c in chain:
-            if c["strike"] == strike and c["right"] == right:
-                price = c.get("marketPrice") or c.get("bid") or c.get("ask")
-                if price and price > 0:
-                    return price
-                else:
-                    raise ValueError(f"No valid price for {expiry} {strike} {right}")
-        raise ValueError(f"Option {expiry} {strike} {right} not found")
-
-    # ---------------- Orders ----------------
-    def place_order(self, action="BUY", quantity=1, trigger=None):
-        if not self.symbol or not self.expiry or not self.strike or not self.right:
-            raise ValueError("Option parameters (symbol/expiry/strike/right) not set")
-
-        self.price = self.get_market_price()
-        entry_price = self.get_option_price(self.expiry, self.strike, self.right)
-        if not entry_price:
-            raise ValueError("Option contract not found in chain")
-
-        if self.stop_loss is None:
-            self.stop_loss = round(entry_price * 0.8, 2)
-        if self.take_profit is None:
-            self.take_profit = round(entry_price * 1.2, 2)
+        current_price = self.refresh_market_price()
+        if not current_price:
+            raise ValueError("Could not get current market price")
 
         order = Order(
-            symbol=self.symbol,
-            expiry=self.expiry,
-            strike=self.strike,
-            right=self.right,
+            symbol=self._symbol,
+            expiry=self._expiry,
+            strike=self._strike,
+            right=self._right,
             qty=quantity,
-            entry_price=entry_price,
-            tp_price=self.take_profit,
-            sl_price=self.stop_loss,
-            action=action,
-            trigger=trigger
+            entry_price=0.10,
+            tp_price=self._take_profit,
+            sl_price=self._stop_loss,
+            action=action.upper(),
+            trigger=trigger_price
         )
 
-        if order.trigger is None or order.is_triggered(self.price):
-            result = self.tws.place_bracket_order(order)
-            order.mark_active(result)
+        if not trigger_price or order.is_triggered(current_price):
+            success = self._tws_service.place_custom_order(order)
+            if success:
+                order.mark_active(result=f"IB Order ID: {getattr(order, '_ib_order_id', 'Unknown')}")
+                logging.info(f"AppModel: Order executed: {order.order_id}")
+            else:
+                order.mark_failed("Failed to place order with TWS")
+                logging.error(f"AppModel: Order failed: {order.order_id}")
         else:
-            self.waiter.add_order(order)
-            order.state = OrderState.PENDING
+            self._order_wait_service.add_order(order)
+            logging.info(f"AppModel: Order waiting for trigger: {order.order_id}")
 
-        self.orders.append(order)
+        self._orders.append(order)
         return order.to_dict()
 
-    def cancel_order(self, order_id: str):
-        for o in self.orders:
-            if o.order_id == order_id and o.state == OrderState.PENDING:
-                self.waiter.cancel_order(order_id)
-                o.mark_cancelled()
+    def cancel_pending_order(self, order_id: str) -> bool:
+        for order in self._orders:
+            if order.order_id == order_id and order.state == OrderState.PENDING:
+                self._order_wait_service.cancel_order(order_id)
+                order.mark_cancelled()
+                logging.info(f"AppModel: Order cancelled: {order_id}")
                 return True
+        logging.warning(f"AppModel: Order not found or not pending: {order_id}")
         return False
 
-    def invalidate(self):
-        self.symbol = None
-        self.price = None
-        self.expiry = None
-        self.strike = None
-        self.right = None
-        self.stop_loss = None
-        self.take_profit = None
-        return True
+    def get_orders(self, state_filter: Optional[str] = None) -> List[Dict]:
+        if state_filter:
+            return [order.to_dict() for order in self._orders 
+                    if order.state.value == state_filter]
+        return [order.to_dict() for order in self._orders]
 
-    def list_orders(self, state: str = None):
-        if state:
-            return [o.to_dict() for o in self.orders if o.state.value == state]
-        return [o.to_dict() for o in self.orders]
-
-    def update_order(self, order_id: str, tp_price=None, sl_price=None):
-        for o in self.orders:
-            if o.order_id == order_id:
-                if tp_price is not None:
-                    o.tp_price = tp_price
-                if sl_price is not None:
-                    o.sl_price = sl_price
-                return o.to_dict()
+    def get_order_by_id(self, order_id: str) -> Optional[Dict]:
+        for order in self._orders:
+            if order.order_id == order_id:
+                return order.to_dict()
         return None
 
-    def get_state(self):
+    def update_order_risk(self, order_id: str, stop_loss: Optional[float] = None, 
+                         take_profit: Optional[float] = None) -> bool:
+        for order in self._orders:
+            if order.order_id == order_id:
+                if stop_loss is not None:
+                    order.sl_price = stop_loss
+                if take_profit is not None:
+                    order.tp_price = take_profit
+                logging.info(f"AppModel: Order updated: {order_id}")
+                return True
+        logging.warning(f"AppModel: Order not found for update: {order_id}")
+        return False
+
+    # ==================== APPLICATION STATE MANAGEMENT ====================
+    def reset(self):
+        self._symbol = None
+        self._underlying_price = None
+        self._expiry = None
+        self._strike = None
+        self._right = None
+        self._stop_loss = None
+        self._take_profit = None
+        logging.info("AppModel: Model state reset")
+
+    def clear_orders(self):
+        self._orders.clear()
+        logging.info("AppModel: All orders cleared")
+
+    def get_application_state(self) -> Dict:
         return {
-            "symbol": self.symbol,
-            "price": self.price,
-            "expiry": self.expiry,
-            "strike": self.strike,
-            "right": self.right,
-            "stop_loss": self.stop_loss,
-            "take_profit": self.take_profit,
-            "orders": [o.to_dict() for o in self.orders],
+            "symbol": self._symbol,
+            "underlying_price": self._underlying_price,
+            "expiry": self._expiry,
+            "strike": self._strike,
+            "right": self._right,
+            "stop_loss": self._stop_loss,
+            "take_profit": self._take_profit,
+            "connected": self._connected,
+            "orders_count": len(self._orders),
+            "pending_orders": len([o for o in self._orders if o.state == OrderState.PENDING]),
+            "active_orders": len([o for o in self._orders if o.state == OrderState.ACTIVE])
         }
+
+    # ==================== CONTEXT MANAGEMENT ====================
+    def __enter__(self):
+        self.connect_services()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.disconnect_services()
+
+# Singleton instance
+app_model = AppModel()
