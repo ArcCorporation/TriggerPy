@@ -7,7 +7,7 @@ from ibapi.contract import Contract
 from ibapi.order import Order as IBOrder
 from ibapi.common import BarData
 from threading import Thread, Event
-from Helpers.Order import Order
+from Order import Order
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
