@@ -31,6 +31,20 @@ class TWSService(EWrapper, EClient):
     def nextValidId(self, orderId: int):
         self.nextOrderId = orderId
 
+    
+
+    def get_contract_details(self, symbol: str, secType: str = "OPT", exchange: str = "SMART",
+                         currency: str = "USD", reqId: int = 9201):
+        c = Contract()
+        c.symbol = symbol
+        c.secType = secType
+        c.exchange = exchange
+        c.currency = currency
+        self.reqContractDetails(reqId, c)
+        time.sleep(2)
+        return self.contract_details.get(reqId, [])
+
+
     def error(self, reqId, errorCode, errorString):
         # suppress IB spam (only show real errors)
         if errorCode < 2000:

@@ -95,6 +95,14 @@ class AppModel:
 
     # ---------------- Orders ----------------
 
+    def get_maturity(self, symbol: str):
+        details = self.tws.get_contract_details(symbol, secType="OPT")
+        if not details:
+            return None
+        expiries = sorted({cd.expiry for cd in details if cd.expiry})
+        return expiries[0] if expiries else None
+
+
     def place_order(self, action="BUY", quantity=1, trigger=None):
         """Order yarat, trigger varsa pending’e at, yoksa anında TWS’e gönder."""
         if not self.symbol or not self.expiry or not self.strike or not self.right:

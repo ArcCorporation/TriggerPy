@@ -2,7 +2,7 @@
 import tkinter as tk
 from tkinter import ttk
 from model import AppModel
-
+import logging
 
 class Banner(tk.Canvas):
     def __init__(self, parent, **kwargs):
@@ -90,7 +90,7 @@ class OrderFrame(tk.Frame):
     # ---------------- Handlers ----------------
     def on_symbol_typed(self, event):
         query = self.combo_symbol.get().upper()
-        if len(query) < 3:
+        if len(query) < 2:
             return
         try:
             results = self.model.tws.search_symbol(query)
@@ -102,23 +102,55 @@ class OrderFrame(tk.Frame):
 
     def on_symbol_selected(self, event=None):
         selection = self.combo_symbol.get()
+        logging.info(f"[GUI] Symbol selected: {selection}")
         if not selection:
             return
+
         symbol = selection.split(" - ")[0]
         try:
             snap = self.model.polygon.get_snapshot(symbol)
             if snap and "last" in snap:
-                self.update_price(snap["last"])
+                current_price = float(snap["last"])
+                self.update_price(current_price)
+
+                # Strike = market price
+                self.entry_strike.delete(0, tk.END)
+                self.entry_strike.insert(0, f"{current_price:.2f}")
+
+                # Qty = 1
+                self.entry_qty.delete(0, tk.END)
+                self.entry_qty.insert(0, "1")
+
+                # StopLoss = 0
+                self.entry_sl.delete(0, tk.END)
+                self.entry_sl.insert(0, "0")
+
+                # Profit % = 0
+                self.entry_tp.delete(0, tk.END)
+                self.entry_tp.insert(0, "0")
+
+                # Offset = 0
+                self.entry_offset.delete(0, tk.END)
+                self.entry_offset.insert(0, "0")
+
+                logging.info("[GUI] Auto-fill defaults applied")
         except Exception as e:
-            print(f"[UI] Price fetch error: {e}")
+            logging.error(f"[UI] Price fetch error: {e}")
+
+
+
+
 
     def save_order(self):
-        order = self.model.place_order(
+        order_data = self.model.place_order(
             action="BUY" if self.var_type.get() == "CALL" else "SELL",
             quantity=int(self.entry_qty.get() or 1),
             trigger=float(self.entry_trigger.get() or 0.0)
         )
-        self.update_state(order.state)
+
+        # order_data is a dict (from to_dict), so use key not attribute
+        state = order_data.get("state", "").upper()
+        self.update_state(state)
 
     def invalidate_order(self):
         self.model.cancel_order(self.order_id)
