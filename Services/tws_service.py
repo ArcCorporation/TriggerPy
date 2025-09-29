@@ -6,7 +6,7 @@ import threading
 import time
 import random
 import logging
-from Order import Order
+from Services.Order import Order
 
 
 
@@ -154,7 +154,7 @@ class TWSService(EWrapper, EClient):
 
 # --- Example CLI Run ---
 if __name__ == "__main__":
-    from Order import Order
+
 
     tws = TWSService()
     tws.connect_and_run()
