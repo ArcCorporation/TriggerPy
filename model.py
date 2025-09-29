@@ -8,10 +8,10 @@ class AppModel:
     def __init__(self):
         # state
         self.symbol = None
-        self.price = None
+        self.price = None           # underlying stock price
         self.expiry = None
         self.strike = None
-        self.right = None
+        self.right = None           # always "C" or "P"
         self.stop_loss = None
         self.take_profit = None
         self.orders = []
@@ -22,6 +22,7 @@ class AppModel:
         self.polygon = polygon_service.PolygonService()
         self.waiter = OrderWaitService(self.polygon, self.tws)
 
+    # ---------------- Connection ----------------
     def reconnect_broker(self):
         try:
             if hasattr(self.tws, "disconnect"):
@@ -33,7 +34,6 @@ class AppModel:
             return False
 
     # ---------------- Symbol & Market ----------------
-
     def set_symbol(self, symbol: str):
         self.symbol = symbol.upper()
         self.price = self.get_market_price()
@@ -46,12 +46,34 @@ class AppModel:
         return self.price
 
     # ---------------- Option & Risk ----------------
-
     def set_option(self, expiry: str, strike: float, right: str):
+    # normalize right
+        right = right.upper()
+        if right in ("CALL", "C"):
+            self.right = "C"
+        elif right in ("PUT", "P"):
+            self.right = "P"
+        else:
+            raise ValueError("Right must be CALL/PUT or C/P")
+
+        # wait until chain is available
+        chain = []
+        for _ in range(5):  # retry up to 5 times
+            chain = self.get_option_chain(self.symbol, expiry)
+            if chain:
+                break
+            import time; time.sleep(1)
+
+        if not chain:
+            raise ValueError(f"No option chain data available for {expiry}")
+
+        if not any(c["strike"] == strike and c["right"] == self.right for c in chain):
+            raise ValueError(f"Invalid option: {expiry} {strike} {self.right}")
+
         self.expiry = expiry
         self.strike = strike
-        self.right = right.upper()
         return self.expiry, self.strike, self.right
+
 
     def set_risk(self, stop_loss: float, take_profit: float):
         self.stop_loss = stop_loss
@@ -63,46 +85,56 @@ class AppModel:
         return self.stop_loss
 
     def set_profit_taking(self, percent: float):
-        if not self.price:
-            self.get_market_price()
-        if self.right == "CALL":
-            self.take_profit = round(self.price * (1 + percent / 100), 2)
-        elif self.right == "PUT":
-            self.take_profit = round(self.price * (1 - percent / 100), 2)
+        entry_price = self.get_option_price(self.expiry, self.strike, self.right)
+        if not entry_price:
+            return None
+        if self.right == "C":
+            self.take_profit = round(entry_price * (1 + percent / 100), 2)
+        elif self.right == "P":
+            self.take_profit = round(entry_price * (1 + percent / 100), 2)
         return self.take_profit
 
     def set_breakeven(self):
-        if self.price:
-            self.stop_loss = self.price
+        entry_price = self.get_option_price(self.expiry, self.strike, self.right)
+        if entry_price:
+            self.stop_loss = entry_price
         return self.stop_loss
 
     def calculate_quantity(self, position_size: float, price: float = None):
         if price is None:
-            price = self.get_market_price()
+            price = self.get_option_price(self.expiry, self.strike, self.right)
         if not price or price <= 0:
             return 0
         return int(position_size // price)
 
     # ---------------- Options Data via TWS ----------------
-
     def get_maturities(self, symbol: str):
-        """
-        Get all available expiries for a given symbol (via TWS).
-        """
-        expiries = self.tws.get_option_expiries(symbol)
+        expiries = self.tws.get_maturities(symbol)
         return sorted(expiries) if expiries else []
 
     def get_option_chain(self, symbol: str, expiry: str):
+        return self.tws.get_option_chain(symbol, expiry=expiry) or []
+
+    def get_option_price(self, expiry: str, strike: float, right: str):
         """
-        Get the option chain for a given symbol + expiry.
+        Try to find the option premium from TWS chain data.
         """
-        return self.tws.get_option_chain(symbol, expiry=expiry)
+        chain = self.get_option_chain(self.symbol, expiry)
+        for c in chain:
+            if c["strike"] == strike and c["right"] == right:
+                # IBKR contractDetails doesn’t give bid/ask directly
+                # so fall back to strike/right for now
+                return c.get("marketPrice") or c.get("bid") or c.get("ask") or 1.0
+        return None
 
     # ---------------- Orders ----------------
-
     def place_order(self, action="BUY", quantity=1, trigger=None):
         if not self.symbol or not self.expiry or not self.strike or not self.right:
             raise ValueError("Option parameters (symbol/expiry/strike/right) not set")
+
+        entry_price = self.get_option_price(self.expiry, self.strike, self.right)
+        if not entry_price:
+            raise ValueError("Option contract not found in chain")
 
         order = Order(
             symbol=self.symbol,
@@ -110,7 +142,7 @@ class AppModel:
             strike=self.strike,
             right=self.right,
             qty=quantity,
-            entry_price=self.price,
+            entry_price=entry_price,
             tp_price=self.take_profit,
             sl_price=self.stop_loss,
             action=action,
