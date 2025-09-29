@@ -11,10 +11,11 @@ model = AppModel()
 # 1. Sembol ayarla
 price = model.set_symbol("TSLA")
 logging.info(f"Symbol set: TSLA, market price={price}")
-
+time.sleep(3)
 # 2. Expiry listesi al
+conid = model.get_conid("TSLA")
 expiries = model.get_maturities("TSLA")
-
+time.sleep(1)
 if expiries:
     expiries = sorted(expiries)
     #logging.info(f"All expiries ({len(expiries)} total): {expiries[:15]} ...")  # ilk 15 tanesini yaz
