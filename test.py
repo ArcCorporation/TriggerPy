@@ -1,169 +1,89 @@
+# test.py - TSLA Trigger Order Test using AppModel only
 
-# test_fixed.py - Trigger order test (non-destructive; keeps old logic intact)
 import logging
 import time
 from model import app_model
+import Services.nasdaq_info as nasdaq_info
+
 
 def setup_logging():
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
+        format="%(asctime)s - %(levelname)s - %(message)s"
     )
 
-def pick_strike(expiry: str) -> float | None:
-    """Pick a reasonable strike for the current symbol/expiry using TWSService directly.
-    This avoids relying on any internal cache that might have been cleared.
-    """
-    try:
-        # Ask TWS for a fresh chain to get strikes
-        symbol = app_model.symbol
-        chain = app_model._tws_service.get_maturities(symbol)  # public method
-        if not chain:
-            logging.error("Could not fetch option chain for strikes")
-            return None
 
-        strikes = sorted(list(chain.get('strikes', [])))
-        if not strikes:
-            logging.error("No strikes returned by TWS for %s", symbol)
-            return None
+def main(timeout_sec: int = 120):
+    setup_logging()
 
-        # Choose strike closest to current underlying price
-        px = app_model.refresh_market_price()
-        if px is None:
-            return strikes[len(strikes)//2]
+    # ✅ Check market hours first
+    if not nasdaq_info.is_market_open():
+        print("⚠️ Market is closed!")
+        print(nasdaq_info.market_status_string())
+        print("➡️ Please try again when the market is open.")
+        return
 
-        return min(strikes, key=lambda s: abs(s - px))
-    except Exception as e:
-        logging.exception("pick_strike failed: %s", e)
-        return None
+    print("✅ Market is open:", nasdaq_info.market_status_string())
 
-def test_order_wait_service(timeout_sec: int = 90):
-    print("🧪 TESTING ORDER WAIT SERVICE TRIGGER SYSTEM")
-
-    # Connect services
+    # Connect
     if not app_model.connect_services():
         print("❌ Failed to connect services")
-        return False
+        return
+    print("✅ Connected to services")
 
-    print("✅ Services connected")
-
-    # Choose symbol and read current price
-    app_model.symbol = "SPY"
+    # Choose TSLA
+    app_model.symbol = "TSLA"
     current_price = app_model.refresh_market_price()
     if current_price is None:
-        print("❌ Failed to read market price (Polygon?)")
-        return False
-    print(f"✅ {app_model.symbol} Current Price: {current_price}")
+        print("❌ Could not fetch TSLA price")
+        return
+    print(f"TSLA current price: {current_price}")
 
-    # Expirations
+    # Pick first available expiry (already sorted in model)
     maturities = app_model.get_available_maturities()
     if not maturities:
-        print("❌ No maturities available")
-        return False
-    expiry = sorted(maturities)[0]
+        print("❌ No maturities found")
+        return
+    expiry = maturities[0]
 
-    # Strikes
-    strike = pick_strike(expiry)
-    if strike is None:
-        print("❌ Could not pick a strike")
-        return False
+    # Pick strike nearest to price
+    strikes = app_model.get_available_strikes(expiry)
+    if not strikes:
+        print("❌ No strikes found")
+        return
+    strike = min(strikes, key=lambda s: abs(s - current_price))
 
     app_model.set_option_contract(expiry, strike, "CALL")
-    print(f"✅ Option contract set: {expiry} {strike}C")
+    print(f"✅ Contract set: {expiry} {strike}C")
 
-    # Place breakout trigger just above current price
-    trigger_price = round(current_price + 0.01, 2)
-    print(f"🎯 Placing breakout order: trigger @ {trigger_price} (> {current_price})")
+    # Place trigger 0.10 above current
+    trigger_price = round(current_price + 0.10, 2)
+    print(f"🎯 Placing TSLA breakout order with trigger {trigger_price}")
 
-    order_result = app_model.place_option_order(
+    order = app_model.place_option_order(
         action="BUY",
         quantity=1,
         trigger_price=trigger_price
     )
-    print(f"✅ Order placed: {order_result.get('order_id')}")
-    print(f"   State: {order_result.get('state')}")
-    print(f"   Trigger: {order_result.get('trigger')}")
+    print(f"✅ Order created: {order.get('order_id')} (state={order.get('state')})")
 
-    # (Optional) peek pending in wait service if available
-    try:
-        pending_orders = app_model._order_wait_service.list_pending_orders()
-        print(f"📋 Orders in OrderWaitService: {len(pending_orders)}")
-        if pending_orders:
-            print(f"   Pending order: {pending_orders[0].get('order_id')}")
-    except Exception:
-        pass
-
-    # Monitor until triggered or timeout
-    print(f"\n⏳ Monitoring for breakout (waiting for {app_model.symbol} to hit {trigger_price})...")
+    # Monitor
+    print(f"\n⏳ Waiting for trigger... (timeout {timeout_sec}s)")
     start = time.time()
-    triggered = False
     while time.time() - start < timeout_sec:
-        # refresh price and order list
-        cur = app_model.refresh_market_price()
         orders = app_model.get_orders()
-
-        any_active = False
         for o in orders:
-            if o.get('state') == 'ACTIVE':
-                any_active = True
-                print(f"🚀 ORDER TRIGGERED! {o.get('order_id')} ACTIVE at price ~{cur}")
-                triggered = True
-                break
-        if any_active:
-            break
+            if o.get("state") == "ACTIVE":
+                print(f"🚀 Triggered! Order {o.get('order_id')} is ACTIVE")
+                app_model.disconnect_services()
+                print("✅ Disconnected")
+                return
+        time.sleep(2)
 
-        # progress output
-        print(f"⏳ Still waiting... Current: {cur}, Need: {trigger_price}")
-        time.sleep(1.5)
-
-    # Final status
-    print("\n📊 Final order status:")
-    for o in app_model.get_orders():
-        print(f"   {o.get('order_id')}: {o.get('state')} (Trigger: {o.get('trigger')})")
-
-    # Disconnect
+    print("⌛ Timeout reached, order not triggered yet.")
     app_model.disconnect_services()
-    print("✅ Services disconnected")
+    print("✅ Disconnected")
 
-    return triggered
-
-def test_immediate_execution():
-    print("\n🧪 TESTING IMMEDIATE EXECUTION (no trigger)")
-    if not app_model.connect_services():
-        print("❌ Failed to connect services")
-        return False
-
-    app_model.symbol = "SPY"
-    px = app_model.refresh_market_price()
-    if px is None:
-        print("❌ Failed to read market price")
-        return False
-    print(f"✅ {app_model.symbol} Price: {px}")
-
-    maturities = app_model.get_available_maturities()
-    if not maturities:
-        print("❌ No maturities available")
-        return False
-    expiry = sorted(maturities)[0]
-
-    strike = pick_strike(expiry)
-    if strike is None:
-        print("❌ Could not pick a strike")
-        return False
-
-    app_model.set_option_contract(expiry, strike, "CALL")
-    print("Placing immediate order...")
-    res = app_model.place_option_order(action="BUY", quantity=1)  # no trigger
-    print(f"✅ Immediate order: {res.get('order_id')} - State: {res.get('state')}")
-
-    app_model.disconnect_services()
-    print("✅ Services disconnected")
-    return True
 
 if __name__ == "__main__":
-    setup_logging()
-    ok = test_order_wait_service(timeout_sec=90)
-    if not ok:
-        print("ℹ️ Trigger did not fire within the timeout (this can be normal in quiet markets).")
-    test_immediate_execution()
-    print("\n🎉 ORDER WAIT SERVICE TEST COMPLETE")
+    main()
