@@ -1,6 +1,5 @@
 import threading
 import logging
-import Helpers.printer as p
 from Helpers.Order import Order
 
 
@@ -34,7 +33,6 @@ class OrderWaitService:
 
         msg = f"[WaitService] Order added {order_id} (waiting for trigger {order.trigger})"
         logging.info(msg)
-        p.PRINT(msg)
         return order_id
 
     def cancel_order(self, order_id: str):
@@ -53,7 +51,6 @@ class OrderWaitService:
 
                 msg = f"[WaitService] Order cancelled {order_id}"
                 logging.info(msg)
-                p.PRINT(msg)
 
     def list_pending_orders(self):
         """Return all pending orders as dicts."""
@@ -88,16 +85,60 @@ class OrderWaitService:
 
     def _finalize_order(self, order_id: str, order: Order):
         """
-        Sends the order to TWS once trigger condition is met.
+        Sends the order to TWS using the new TWSService.
         """
         try:
-            result = self.tws.place_bracket_order(order)
-            order.mark_active(result)
-            msg = f"[WaitService] Order finalized {order_id} → {result}"
-            logging.info(msg)
-            p.PRINT(msg)
+            # Use the new TWSService method
+            success = self.tws.place_custom_order(order)
+            
+            if success:
+                order.mark_active(result=f"IB Order ID: {order._ib_order_id}")
+                msg = f"[WaitService] Order finalized {order_id} → IB ID: {order._ib_order_id}"
+                logging.info(msg)
+            else:
+                order.mark_failed("Failed to place order with TWS")
+                msg = f"[WaitService] Order placement failed {order_id}"
+                logging.error(msg)
+                
         except Exception as e:
             order.mark_failed(str(e))
             msg = f"[WaitService] Finalize failed {order_id}: {e}"
             logging.error(msg)
-            p.PRINT(msg)
+
+    def get_order_status(self, order_id: str):
+        """
+        Get the current status of an order from TWSService.
+        """
+        return self.tws.get_order_status(order_id)
+
+    def cancel_active_order(self, order_id: str) -> bool:
+        """
+        Cancel an order that has already been sent to TWS.
+        """
+        try:
+            # First try to cancel via TWS if it's an active order
+            if self.tws.cancel_custom_order(order_id):
+                # Also remove from our tracking
+                self.cancel_order(order_id)
+                return True
+            return False
+        except Exception as e:
+            logging.error(f"[WaitService] Cancel active order failed {order_id}: {e}")
+            return False
+
+    def get_all_orders_status(self):
+        """
+        Get status for all orders (pending and active).
+        """
+        result = {
+            'pending': self.list_pending_orders(),
+            'active': {}
+        }
+        
+        # Get status for orders that have been sent to TWS
+        for order_id in list(self.pending_orders.keys()):
+            status = self.get_order_status(order_id)
+            if status:
+                result['active'][order_id] = status
+                
+        return result
