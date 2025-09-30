@@ -1,6 +1,7 @@
 import logging
 from typing import List, Dict, Optional, Tuple
 
+from Services.price_watcher import PriceWatcher
 from Services.tws_service import create_tws_service
 from Services.polygon_service import polygon_service
 from Services.order_wait_service import OrderWaitService
@@ -14,6 +15,12 @@ class GeneralApp:
         self._polygon = None
         self._order_wait = None
         self._connected = False
+        self._watchers = set()
+
+
+    def watch_price(self, symbol, update_fn):
+        watcher = PriceWatcher(symbol,update_fn, polygon_service)
+        return watcher
 
     def connect(self) -> bool:
         """Connect global services once for all models."""

@@ -6,7 +6,7 @@ from typing import Optional, Callable
 
 from model import general_app, get_model
 from Services import nasdaq_info
-from Services.price_watcher import PriceWatcher
+
 
 
 # ---------------- Banner ----------------
@@ -56,7 +56,7 @@ class SymbolSelector(ttk.Frame):
 
         self.lbl_price = ttk.Label(self, text="Price: -")
         self.lbl_price.pack(side="left", padx=10)
-
+        self.watcher = None
         # threading state
         self._search_req_id = 0
         self._search_lock = threading.Lock()
@@ -95,9 +95,14 @@ class SymbolSelector(ttk.Frame):
             return
         symbol = selection.split(" - ")[0]
         logging.info(f"Symbol selected: {symbol}")
+        
+        self.watcher = general_app.watch_price(symbol,self._update_price)
         # fetch price in background to avoid blocking UI
         threading.Thread(target=self._price_worker, args=(symbol,), daemon=True).start()
         self.on_symbol_selected_cb(symbol)
+    
+    def _update_price(self, price):
+        self.lbl_price.config(text=f"Price: {price}")
 
     def _price_worker(self, symbol: str):
         try:
