@@ -34,7 +34,7 @@ class TWSService(EWrapper, EClient):
         self._contract_details_event = threading.Event()
         
         self._request_counter = 1
-        
+        self.symbol_samples = {}
         # Track custom orders from Helpers.Order
         self.option_chains = {}  # Add this line
         self._pending_orders = {}  # custom_order_id -> Helpers.Order object
@@ -44,6 +44,28 @@ class TWSService(EWrapper, EClient):
         self.next_valid_order_id = orderId
         logging.info(f"NextValidId: {orderId} (Client ID: {self.client_id})")
         self.connection_ready.set()
+
+    # ---------------- Symbol Search ----------------
+    def symbolSamples(self, reqId, contractDescriptions):
+        results = []
+        for desc in contractDescriptions:
+            c = desc.contract
+            results.append({
+                "symbol": c.symbol,
+                "secType": c.secType,
+                "currency": c.currency,
+                "exchange": c.exchange,
+                "primaryExchange": c.primaryExchange,
+                "description": desc.derivativeSecTypes
+            })
+        self.symbol_samples[reqId] = results
+
+    def search_symbol(self, name: str, reqId: int = None):
+        if reqId is None:
+            reqId = self._get_next_req_id()
+        self.reqMatchingSymbols(reqId, name)
+        time.sleep(2)
+        return self.symbol_samples.get(reqId, [])
 
     def error(self, reqId, errorCode, errorString, *args):
         """Error callback - handles both regular and protobuf errors"""
