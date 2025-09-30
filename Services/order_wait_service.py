@@ -72,7 +72,7 @@ class OrderWaitService:
 
         # Debug log
         msg = f"[WaitService] Tick received for {order.symbol} @ {price}, trigger={order.trigger}"
-        logging.debug(msg)
+        logging.info(msg)
 
         # Check if trigger is satisfied
         if order.is_triggered(price):

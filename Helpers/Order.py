@@ -38,9 +38,9 @@ class Order:
         """
         if self.trigger is None:
             return True
-        if self.right == "CALL":
+        if self.right == "CALL" or self.right == "C":
             return market_price > self.trigger
-        elif self.right == "PUT":
+        elif self.right == "PUT"or self.right == "P":
             return market_price < self.trigger
         return False
 
