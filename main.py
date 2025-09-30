@@ -1,11 +1,13 @@
 import tkinter as tk
 from tkinter import ttk
-from model import AppModel
-from view import Banner, OrderFrame
-from Helpers.debugger import DebugFrame   # yeni eklendi
-import Helpers.printer 
 import logging
+
+from Helpers.printer import logger
 from Helpers.debugger import DebugFrame, TkinterHandler
+
+from model import general_app
+from view import Banner, OrderFrame
+
 
 class ArcTriggerApp(tk.Tk):
     def __init__(self):
@@ -13,17 +15,19 @@ class ArcTriggerApp(tk.Tk):
         self.title("ArcTriggerPy")
         self.configure(bg="black")
 
-        # Model (tek instance)
-        self.model = AppModel()
-
         # Banner
-        banner = Banner(self)
-        banner.pack(fill="x")
+        self.banner = Banner(self)
+        self.banner.pack(fill="x")
 
-        # Üst kontrol paneli (Order Count + Start Trigger + Debug)
+        # Top control panel
         top_frame = ttk.Frame(self)
         top_frame.pack(fill="x", pady=10)
 
+        # Connect / Disconnect
+        ttk.Button(top_frame, text="Connect", command=self.connect_services).pack(side="left", padx=5)
+        ttk.Button(top_frame, text="Disconnect", command=self.disconnect_services).pack(side="left", padx=5)
+
+        # Order frame count + Start
         ttk.Label(top_frame, text="Order Count:", background="black", foreground="white").pack(side="left", padx=5)
 
         self.spin_count = tk.Spinbox(top_frame, from_=1, to=10, width=5)
@@ -34,6 +38,7 @@ class ArcTriggerApp(tk.Tk):
         start_btn = tk.Button(top_frame, text="Start Trigger", bg="red", fg="white", command=self.build_order_frames)
         start_btn.pack(side="left", padx=10)
 
+        # Debug toggle
         self.btn_debug = tk.Button(top_frame, text="Show Debug", command=self.toggle_debug)
         self.btn_debug.pack(side="left", padx=10)
 
@@ -41,15 +46,26 @@ class ArcTriggerApp(tk.Tk):
         self.order_container = ttk.Frame(self)
         self.order_container.pack(fill="both", expand=True)
 
-        # Frame referansları
         self.order_frames = []
-
-        # Debug frame (başta None)
         self.debug_frame = None
 
+    # --- Connection handling ---
+    def connect_services(self):
+        if general_app.connect():
+            self.banner.update_connection_status(True)
+            logger.info("Services connected successfully")
+        else:
+            self.banner.update_connection_status(False)
+            logger.error("Failed to connect services")
+
+    def disconnect_services(self):
+        general_app.disconnect()
+        self.banner.update_connection_status(False)
+        logger.info("Services disconnected")
+
+    # --- Order frame handling ---
     def build_order_frames(self):
-        """Spinbox değerine göre order frame’leri oluştur."""
-        # Öncekileri temizle
+        """Create order frames based on spinbox value."""
         for frame in self.order_frames:
             frame.destroy()
         self.order_frames.clear()
@@ -59,26 +75,22 @@ class ArcTriggerApp(tk.Tk):
         except ValueError:
             count = 1
 
-        # Yeni frame’ler oluştur
         for i in range(count):
-            frame = OrderFrame(self.order_container, self.model, order_id=i + 1)
+            frame = OrderFrame(self.order_container, order_id=i + 1)
             frame.pack(fill="x", pady=10, padx=10)
             self.order_frames.append(frame)
 
+    # --- Debug console toggle ---
     def toggle_debug(self):
-        """Toggle the debug console and attach/detach logging handler."""
-        
-
         if self.debug_frame and self.debug_frame.winfo_exists():
-            # Close existing debug frame
+            # Close debug frame
             self.debug_frame.destroy()
             self.debug_frame = None
             self.btn_debug.config(text="Show Debug")
 
-            # Remove attached TkinterHandler(s)
-            for h in logging.getLogger().handlers[:]:
+            for h in logger.handlers[:]:
                 if isinstance(h, TkinterHandler):
-                    logging.getLogger().removeHandler(h)
+                    logger.removeHandler(h)
 
         else:
             # Create and show new debug frame
@@ -86,11 +98,10 @@ class ArcTriggerApp(tk.Tk):
             self.debug_frame.pack(fill="both", expand=True, padx=10, pady=10)
             self.debug_frame.add_text("[INFO] Debug console started")
 
-            # Attach handler
             handler = TkinterHandler(self.debug_frame)
             handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-            logging.getLogger().addHandler(handler)
-            logging.getLogger().setLevel(logging.INFO)
+            logger.addHandler(handler)
+            logger.setLevel(logging.INFO)
 
             self.btn_debug.config(text="Hide Debug")
 
