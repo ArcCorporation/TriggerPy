@@ -157,7 +157,7 @@ class AppModel:
     def _validate_breakout_trigger(self, trigger_price: Optional[float], current_price: float) -> bool:
         if trigger_price is None:
             return True
-        if (self._right == "P" and trigger_price <= current_price) or (self._right == "C" and trigger_price >= current_price):
+        if (self._right == "C" and trigger_price <= current_price) or (self._right == "P" and trigger_price >= current_price):
             logging.error(f"AppModel[{self._symbol}]: Breakout violation trigger {trigger_price} <= {current_price}")
             return False
         return True
