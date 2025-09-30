@@ -130,3 +130,6 @@ if __name__ == "__main__":
 
     # Test için 10 saniye bekleyelim
     time.sleep(10)
+
+
+polygon_service = PolygonService()

@@ -6,6 +6,7 @@ from typing import Optional, Callable
 
 from model import general_app, get_model
 from Services import nasdaq_info
+from Services.price_watcher import PriceWatcher
 
 
 # ---------------- Banner ----------------
@@ -118,6 +119,7 @@ class OrderFrame(tk.Frame):
         self.order_id = order_id
         self.model = None
         self.current_symbol: Optional[str] = None
+        self._last_price = None   # cached last market price
 
         # request ids to prevent stale updates
         self._symbol_token = 0

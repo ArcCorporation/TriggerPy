@@ -2,7 +2,7 @@ import logging
 from typing import List, Dict, Optional, Tuple
 
 from Services.tws_service import create_tws_service
-from Services.polygon_service import PolygonService
+from Services.polygon_service import polygon_service
 from Services.order_wait_service import OrderWaitService
 from Helpers.Order import Order, OrderState
 
@@ -19,7 +19,7 @@ class GeneralApp:
         """Connect global services once for all models."""
         try:
             self._tws = create_tws_service()
-            self._polygon = PolygonService()
+            self._polygon = polygon_service
             self._order_wait = OrderWaitService(self._polygon, self._tws)
             if self._tws.connect_and_start():
                 self._connected = True
