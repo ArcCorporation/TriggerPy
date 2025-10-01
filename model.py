@@ -196,7 +196,7 @@ class AppModel:
                 order.mark_failed("Failed to place order")
                 logging.error(f"AppModel[{self._symbol}]: Order failed {order.order_id}")
         else:
-            general_app.order_wait.add_order(order)
+            general_app.order_wait.add_order(order, mode ="poll")
             logging.info(f"AppModel[{self._symbol}]: Order waiting breakout {order.order_id}")
 
         self._orders.append(order)
