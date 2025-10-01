@@ -3,52 +3,138 @@ import time
 import logging
 from Helpers.Order import Order
 
+
 class OrderWaitService:
     def __init__(self, polygon_service, tws_service, poll_interval=0.1):
         self.polygon = polygon_service
         self.tws = tws_service
-        self.pending_orders = {}
-        self.cancelled_orders = set()
-        self.lock = threading.Lock()
-        self.poll_interval = poll_interval  # seconds, e.g. 0.1s = 100ms
 
-    def add_order(self, order: Order, mode="ws") -> str:
+        # Active pending orders, keyed by order_id
+        self.pending_orders = {}
+        # Cancelled order IDs
+        self.cancelled_orders = set()
+        # Lock for thread-safety
+        self.lock = threading.Lock()
+
+        # Polling interval for alternate mode (seconds), e.g. 0.1s = 100ms
+        self.poll_interval = poll_interval
+
+    def add_order(self, order: Order, mode: str = "ws") -> str:
+        """
+        Add an order to be executed once its trigger is met.
+        mode="ws"   -> subscribe to live ticks (original behavior)
+        mode="poll" -> start a polling thread using snapshot
+        """
         order_id = order.order_id
         with self.lock:
             self.pending_orders[order_id] = order
 
-        # immediate check
+        # ✅ IMMEDIATE TRIGGER CHECK - Execute immediately if condition already met
         current_price = self.polygon.get_last_trade(order.symbol)
         if current_price and order.is_triggered(current_price):
-            logging.info(f"[WaitService] 🚨 Immediate trigger met {order.symbol} @ {current_price}")
+            logging.info(
+                f"[WaitService] 🚨 TRIGGER ALREADY MET! Executing immediately. "
+                f"Current: {current_price}, Trigger: {order.trigger}"
+            )
             self._finalize_order(order_id, order)
             return order_id
 
+        # Subscribe / start poller only if trigger not already met
         if mode == "ws":
-            # normal path
-            self.polygon.subscribe(order.symbol,
-                lambda price, oid=order_id: self._on_tick(oid, price))
+            # Original path (keep old logic)
+            self.polygon.subscribe(
+                order.symbol,
+                lambda price, oid=order_id: self._on_tick(oid, price)
+            )
         elif mode == "poll":
-            # alternate polling thread
+            # Alternate polling path (new feature)
             t = threading.Thread(
                 target=self._poll_snapshot,
                 args=(order_id, order),
                 daemon=True
             )
             t.start()
+        else:
+            logging.warning(f"[WaitService] Unknown mode '{mode}', defaulting to 'ws'")
+            self.polygon.subscribe(
+                order.symbol,
+                lambda price, oid=order_id: self._on_tick(oid, price)
+            )
 
-        logging.info(f"[WaitService] Order added {order_id} (mode={mode}, trigger={order.trigger}, current={current_price})")
+        msg = (
+            f"[WaitService] Order added {order_id} "
+            f"(mode={mode}, waiting for trigger {order.trigger}, current: {current_price})"
+        )
+        logging.info(msg)
         return order_id
 
-    def _poll_snapshot(self, order_id, order):
-        """Continuously poll snapshot until trigger/cancel."""
+    def cancel_order(self, order_id: str):
+        """
+        Cancel an order. Removes it from pending set and unsubscribes from Polygon.
+        (Keeps original behavior)
+        """
+        with self.lock:
+            if order_id in self.pending_orders:
+                order = self.pending_orders[order_id]
+                order.mark_cancelled()
+                self.cancelled_orders.add(order_id)
+                del self.pending_orders[order_id]
+
+                # Unsubscribe from Polygon feed for this symbol (ws mode)
+                try:
+                    self.polygon.unsubscribe(order.symbol)
+                except Exception as e:
+                    logging.debug(f"[WaitService] Unsubscribe ignored for {order.symbol}: {e}")
+
+                msg = f"[WaitService] Order cancelled {order_id}"
+                logging.info(msg)
+
+    def list_pending_orders(self):
+        """Return all pending orders as dicts. (kept as-is)"""
+        with self.lock:
+            return [o.to_dict() for o in self.pending_orders.values()]
+
+    def _on_tick(self, order_id: str, price: float):
+        """
+        Callback from PolygonService for live ticks.
+        Checks if trigger condition is met and finalizes the order.
+        (kept as-is)
+        """
+        with self.lock:
+            # Make sure order is still pending and not cancelled
+            order = self.pending_orders.get(order_id)
+            if not order or order_id in self.cancelled_orders:
+                return
+
+        # Debug log
+        msg = f"[WaitService] Tick received for {order.symbol} @ {price}, trigger={order.trigger}"
+        logging.info(msg)
+
+        # Check if trigger is satisfied
+        if order.is_triggered(price):
+            self._finalize_order(order_id, order)
+
+            # After finalizing, unsubscribe to stop receiving ticks
+            try:
+                self.polygon.unsubscribe(order.symbol)
+            except Exception as e:
+                logging.debug(f"[WaitService] Unsubscribe ignored for {order.symbol}: {e}")
+
+            with self.lock:
+                if order_id in self.pending_orders:
+                    del self.pending_orders[order_id]
+
+    def _poll_snapshot(self, order_id: str, order: Order):
+        """
+        Alternate mode: continuously poll snapshot until trigger/cancel.
+        (new feature; does NOT remove original ws path)
+        """
         while True:
             with self.lock:
                 if order_id not in self.pending_orders or order_id in self.cancelled_orders:
                     return  # cancelled/removed
 
             snap = self.polygon.get_snapshot(order.symbol)
-          
             if not snap:
                 time.sleep(self.poll_interval)
                 continue
@@ -56,7 +142,8 @@ class OrderWaitService:
             last_price = snap.get("last")
             msg = f"[WaitService] Poll {order.symbol} → {last_price}"
             logging.info(msg)
-            print(msg)
+            print(msg)  # kept from your latest patch
+
             if last_price and order.is_triggered(last_price):
                 self._finalize_order(order_id, order)
                 with self.lock:
@@ -65,3 +152,67 @@ class OrderWaitService:
                 return
 
             time.sleep(self.poll_interval)
+
+    def _finalize_order(self, order_id: str, order: Order):
+        """
+        Sends the order to TWS using the new TWSService.
+        (kept from original)
+        """
+        try:
+            # Use the new TWSService method
+            success = self.tws.place_custom_order(order)
+
+            if success:
+                order.mark_active(result=f"IB Order ID: {order._ib_order_id}")
+                msg = f"[WaitService] Order finalized {order_id} → IB ID: {order._ib_order_id}"
+                logging.info(msg)
+            else:
+                order.mark_failed("Failed to place order with TWS")
+                msg = f"[WaitService] Order placement failed {order_id}"
+                logging.error(msg)
+
+        except Exception as e:
+            order.mark_failed(str(e))
+            msg = f"[WaitService] Finalize failed {order_id}: {e}"
+            logging.error(msg)
+
+    def get_order_status(self, order_id: str):
+        """
+        Get the current status of an order from TWSService.
+        (kept as-is)
+        """
+        return self.tws.get_order_status(order_id)
+
+    def cancel_active_order(self, order_id: str) -> bool:
+        """
+        Cancel an order that has already been sent to TWS.
+        (kept as-is)
+        """
+        try:
+            # First try to cancel via TWS if it's an active order
+            if self.tws.cancel_custom_order(order_id):
+                # Also remove from our tracking
+                self.cancel_order(order_id)
+                return True
+            return False
+        except Exception as e:
+            logging.error(f"[WaitService] Cancel active order failed {order_id}: {e}")
+            return False
+
+    def get_all_orders_status(self):
+        """
+        Get status for all orders (pending and active).
+        (kept as-is)
+        """
+        result = {
+            'pending': self.list_pending_orders(),
+            'active': {}
+        }
+
+        # Get status for orders that have been sent to TWS
+        for order_id in list(self.pending_orders.keys()):
+            status = self.get_order_status(order_id)
+            if status:
+                result['active'][order_id] = status
+
+        return result
