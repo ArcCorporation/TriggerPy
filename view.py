@@ -8,7 +8,6 @@ from model import general_app, get_model
 from Services import nasdaq_info
 
 
-
 # ---------------- Banner ----------------
 class Banner(tk.Canvas):
     def __init__(self, parent, **kwargs):
@@ -152,33 +151,38 @@ class OrderFrame(tk.Frame):
         self.combo_ordertype.grid(row=1, column=5, padx=5)
         self.combo_ordertype.current(0)
 
-        # --- Strike + Maturity ---
-        ttk.Label(self, text="Strike").grid(row=2, column=0)
-        self.entry_strike = ttk.Entry(self, width=8)
-        self.entry_strike.grid(row=2, column=1, padx=5)
+        # --- Position Size ---
+        ttk.Label(self, text="Position Size").grid(row=2, column=0)
+        self.entry_pos_size = ttk.Entry(self, width=10)
+        self.entry_pos_size.grid(row=2, column=1, padx=5)
+        self.entry_pos_size.insert(0, "2000")
 
+        frame_pos_btns = ttk.Frame(self)
+        frame_pos_btns.grid(row=3, column=0, columnspan=2, pady=2)
+        for val in [500, 1000, 2000, 5000]:
+            ttk.Button(frame_pos_btns, text=str(val),
+                       command=lambda v=val: self.entry_pos_size.delete(0, tk.END) or self.entry_pos_size.insert(0, str(v))
+                      ).pack(side="left", padx=2)
+
+        # --- Maturity ---
         ttk.Label(self, text="Maturity").grid(row=2, column=2)
         self.combo_maturity = ttk.Combobox(self, width=10, state="readonly")
         self.combo_maturity.grid(row=2, column=3, padx=5)
         self.combo_maturity.bind("<<ComboboxSelected>>", self.on_maturity_selected)
 
-        ttk.Label(self, text="Select Strike").grid(row=2, column=4)
-        self.combo_strike = ttk.Combobox(self, width=8, state="readonly")
-        self.combo_strike.grid(row=2, column=5, padx=5)
-
-        # --- Qty + SL + TP ---
-        ttk.Label(self, text="Qty").grid(row=3, column=0)
+        # --- Qty (kept for now, can be hidden later) + SL + TP ---
+        ttk.Label(self, text="Qty").grid(row=3, column=2)
         self.entry_qty = ttk.Entry(self, width=8)
-        self.entry_qty.grid(row=3, column=1, padx=5)
+        self.entry_qty.grid(row=3, column=3, padx=5)
         self.entry_qty.insert(0, "1")
 
-        ttk.Label(self, text="Stop Loss").grid(row=3, column=2)
+        ttk.Label(self, text="Stop Loss").grid(row=3, column=4)
         self.entry_sl = ttk.Entry(self, width=8)
-        self.entry_sl.grid(row=3, column=3, padx=5)
+        self.entry_sl.grid(row=3, column=5, padx=5)
 
-        ttk.Label(self, text="Take Profit").grid(row=3, column=4)
+        ttk.Label(self, text="Take Profit").grid(row=3, column=6)
         self.entry_tp = ttk.Entry(self, width=8)
-        self.entry_tp.grid(row=3, column=5, padx=5)
+        self.entry_tp.grid(row=3, column=7, padx=5)
 
         # --- Controls ---
         frame_ctrl = ttk.Frame(self)
@@ -210,7 +214,7 @@ class OrderFrame(tk.Frame):
         self._set_status(f"Ready: {symbol}", "blue")
         self.btn_save.config(state="normal")
 
-        # price + prefill trigger/strike off-thread
+        # price + prefill trigger off-thread
         def price_worker():
             try:
                 price = self.model.refresh_market_price()
@@ -224,8 +228,6 @@ class OrderFrame(tk.Frame):
                     trigger_price = price + 0.10 if self.var_type.get() == "CALL" else price - 0.10
                     self.entry_trigger.delete(0, tk.END)
                     self.entry_trigger.insert(0, f"{trigger_price:.2f}")
-                    self.entry_strike.delete(0, tk.END)
-                    self.entry_strike.insert(0, f"{price:.2f}")
             self._ui(apply)
         threading.Thread(target=price_worker, daemon=True).start()
 
@@ -254,36 +256,12 @@ class OrderFrame(tk.Frame):
                 self.combo_maturity["values"] = maturities
                 if maturities:
                     self.combo_maturity.set(maturities[0])
-                    self.load_strikes_async(maturities[0])
             self._ui(apply)
         threading.Thread(target=worker, daemon=True).start()
 
     def load_strikes_async(self, maturity: str):
-        self._strike_req_id += 1
-        req_id = self._strike_req_id
-
-        def worker():
-            try:
-                strikes = self.model.get_available_strikes(maturity)
-            except Exception as e:
-                logging.error(f"Strike load error: {e}")
-                strikes = []
-            def apply():
-                if req_id != self._strike_req_id:
-                    return
-                strike_values = [str(s) for s in strikes]
-                self.combo_strike["values"] = strike_values
-                # try to pick nearest current strike
-                try:
-                    if strike_values and self.entry_strike.get():
-                        current_strike = float(self.entry_strike.get())
-                        nearest = min(strikes, key=lambda s: abs(s - current_strike)) if strikes else None
-                        if nearest is not None:
-                            self.combo_strike.set(str(nearest))
-                except ValueError:
-                    pass
-            self._ui(apply)
-        threading.Thread(target=worker, daemon=True).start()
+        # placeholder if needed later
+        pass
 
     # ---------- actions ----------
     def place_order(self):
@@ -291,12 +269,8 @@ class OrderFrame(tk.Frame):
             self._set_status("Error: No symbol selected", "red")
             return
 
-        # capture inputs early (UI thread)
         try:
-            strike_str = self.combo_strike.get() or self.entry_strike.get()
-            if not strike_str:
-                raise ValueError("Strike price required")
-            strike = float(strike_str)
+            position_size = float(self.entry_pos_size.get() or 2000)
             maturity = self.combo_maturity.get()
             right = self.var_type.get()
             quantity = int(self.entry_qty.get() or 1)
@@ -313,14 +287,14 @@ class OrderFrame(tk.Frame):
 
         def worker():
             try:
-                self.model.set_option_contract(maturity, strike, right)
+                self.model.set_option_contract(maturity, None, right)
                 if sl is not None:
                     self.model._stop_loss = sl
                 if tp is not None:
                     self.model._take_profit = tp
 
                 order_data = self.model.place_option_order(
-                    action="BUY", quantity=quantity, trigger_price=trigger
+                    action="BUY", position_size=position_size, quantity=quantity, trigger_price=trigger
                 )
                 state = order_data.get("state", "UNKNOWN")
                 msg = f"Order {state}: {order_data.get('order_id')}"
@@ -352,7 +326,6 @@ class OrderFrame(tk.Frame):
         threading.Thread(target=worker, daemon=True).start()
 
     def reset(self):
-        # bump token to invalidate in-flight updates
         self._symbol_token += 1
         self.model = None
         self.current_symbol = None
@@ -360,9 +333,9 @@ class OrderFrame(tk.Frame):
         self.symbol_selector.combo_symbol.set('')
         self.symbol_selector.lbl_price.config(text="Price: -")
         self.entry_trigger.delete(0, tk.END)
-        self.entry_strike.delete(0, tk.END)
+        self.entry_pos_size.delete(0, tk.END)
+        self.entry_pos_size.insert(0, "2000")
         self.combo_maturity.set('')
-        self.combo_strike.set('')
         self.entry_qty.delete(0, tk.END)
         self.entry_qty.insert(0, "1")
         self.entry_sl.delete(0, tk.END)

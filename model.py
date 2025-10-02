@@ -17,9 +17,8 @@ class GeneralApp:
         self._connected = False
         self._watchers = set()
 
-
     def watch_price(self, symbol, update_fn):
-        watcher = PriceWatcher(symbol,update_fn, polygon_service)
+        watcher = PriceWatcher(symbol, update_fn, polygon_service)
         return watcher
 
     def connect(self) -> bool:
@@ -119,6 +118,7 @@ class AppModel:
             logging.error(f"AppModel[{self._symbol}]: Failed to get market price: {e}")
             return None
 
+    # ---------------- Option & Risk ----------------
     def set_option_contract(self, expiry: str, strike: float, right: str) -> Tuple[str, float, str]:
         right = right.upper()
         if right in ("CALL", "C"):
@@ -146,6 +146,36 @@ class AppModel:
             logging.error(f"AppModel[{self._symbol}]: Contract validation failed: {e}")
             return False
 
+    def set_risk(self, stop_loss: float, take_profit: float):
+        self._stop_loss = stop_loss
+        self._take_profit = take_profit
+        return self._stop_loss, self._take_profit
+
+    def set_stop_loss(self, value: float):
+        self._stop_loss = value
+        return self._stop_loss
+
+    def set_profit_taking(self, percent: float):
+        entry_price = self.get_option_price(self._expiry, self._strike, self._right)
+        if not entry_price:
+            return None
+        self._take_profit = round(entry_price * (1 + percent / 100), 2)
+        return self._take_profit
+
+    def set_breakeven(self):
+        entry_price = self.get_option_price(self._expiry, self._strike, self._right)
+        if entry_price:
+            self._stop_loss = entry_price
+        return self._stop_loss
+
+    def calculate_quantity(self, position_size: float, price: float = None):
+        if price is None:
+            price = self.get_option_price(self._expiry, self._strike, self._right)
+        if not price or price <= 0:
+            return 0
+        return int(position_size // price)
+
+    # ---------------- Options Data via TWS ----------------
     def get_available_maturities(self) -> List[str]:
         try:
             maturities = general_app.tws.get_maturities(self._symbol)
@@ -154,11 +184,30 @@ class AppModel:
             logging.error(f"AppModel[{self._symbol}]: Failed to get maturities: {e}")
             return []
 
+    def get_option_chain(self, expiry: str):
+        try:
+            return general_app.tws.get_option_chain(self._symbol, expiry=expiry) or []
+        except Exception as e:
+            logging.error(f"AppModel[{self._symbol}]: Failed to get option chain: {e}")
+            return []
+
+    def get_option_price(self, expiry: str, strike: float, right: str):
+        chain = self.get_option_chain(expiry)
+        for c in chain:
+            if c["strike"] == strike and c["right"] == right:
+                price = c.get("marketPrice") or c.get("bid") or c.get("ask")
+                if price and price > 0:
+                    return price
+                else:
+                    raise ValueError(f"No valid price for {expiry} {strike} {right}")
+        raise ValueError(f"Option {expiry} {strike} {right} not found")
+
+    # ---------------- Orders ----------------
     def _validate_breakout_trigger(self, trigger_price: Optional[float], current_price: float) -> bool:
         if trigger_price is None:
             return True
         if (self._right == "C" and trigger_price <= current_price) or (self._right == "P" and trigger_price >= current_price):
-            logging.error(f"AppModel[{self._symbol}]: Breakout violation trigger {trigger_price} <= {current_price}")
+            logging.error(f"AppModel[{self._symbol}]: Breakout violation trigger {trigger_price} vs {current_price}")
             return False
         return True
 
@@ -174,13 +223,24 @@ class AppModel:
         if not self._validate_breakout_trigger(trigger_price, current_price):
             raise ValueError(f"Trigger {trigger_price} invalid for current price {current_price}")
 
+        entry_price = 0.10
+        try:
+            entry_price = self.get_option_price(self._expiry, self._strike, self._right)
+        except Exception:
+            pass
+
+        if self._stop_loss is None:
+            self._stop_loss = round(entry_price * 0.8, 2)
+        if self._take_profit is None:
+            self._take_profit = round(entry_price * 1.2, 2)
+
         order = Order(
             symbol=self._symbol,
             expiry=self._expiry,
             strike=self._strike,
             right=self._right,
             qty=quantity,
-            entry_price=0.10,
+            entry_price=entry_price,
             tp_price=self._take_profit,
             sl_price=self._stop_loss,
             action=action.upper(),
@@ -196,7 +256,7 @@ class AppModel:
                 order.mark_failed("Failed to place order")
                 logging.error(f"AppModel[{self._symbol}]: Order failed {order.order_id}")
         else:
-            general_app.order_wait.add_order(order, mode ="poll")
+            general_app.order_wait.add_order(order, mode="poll")
             logging.info(f"AppModel[{self._symbol}]: Order waiting breakout {order.order_id}")
 
         self._orders.append(order)
@@ -233,6 +293,18 @@ class AppModel:
         self._take_profit = None
         self._orders.clear()
         logging.info(f"AppModel[{self._symbol}]: State reset")
+
+    def get_state(self):
+        return {
+            "symbol": self._symbol,
+            "price": self._underlying_price,
+            "expiry": self._expiry,
+            "strike": self._strike,
+            "right": self._right,
+            "stop_loss": self._stop_loss,
+            "take_profit": self._take_profit,
+            "orders": [o.to_dict() for o in self._orders],
+        }
 
 
 # --- Per-symbol model registry ---
