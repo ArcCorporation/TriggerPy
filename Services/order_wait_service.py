@@ -19,6 +19,60 @@ class OrderWaitService:
         # Polling interval for alternate mode (seconds), e.g. 0.1s = 100ms
         self.poll_interval = poll_interval
 
+    def start_stop_loss_watcher(self, order: Order, stop_loss_price: float):
+        """
+        Start a dedicated thread to monitor stop-loss for an active order.
+        If price falls to or below stop_loss_price, immediately sell/exit.
+        """
+        def _stop_loss_thread():
+            logging.info(f"[StopLoss] Watching {order.symbol} stop-loss @ {stop_loss_price}")
+            while True:
+                # Exit conditions
+                if order.state not in ("ACTIVE", "PENDING"):
+                    logging.info(f"[StopLoss] Order {order.order_id} no longer active, stopping watcher.")
+                    return
+
+                snap = self.polygon.get_snapshot(order.symbol)
+                if not snap:
+                    time.sleep(self.poll_interval)
+                    continue
+
+                last_price = snap.get("last")
+                logging.info(f"[StopLoss] Poll {order.symbol} → {last_price}, stop={stop_loss_price}")
+
+                if last_price and last_price <= stop_loss_price:
+                    try:
+                        # Execute SELL to exit position
+                        sell_order = Order(
+                            symbol=order.symbol,
+                            expiry=order.expiry,
+                            strike=order.strike,
+                            right=order.right,
+                            qty=order.qty,
+                            entry_price=last_price,
+                            tp_price=None,
+                            sl_price=stop_loss_price,
+                            action="SELL",
+                            trigger=None
+                        )
+                        success = self.tws.place_custom_order(sell_order)
+                        if success:
+                            sell_order.mark_active(result=f"Stop-loss triggered @ {last_price}")
+                            logging.info(f"[StopLoss] Order {order.order_id} exited via stop-loss at {last_price}")
+                        else:
+                            logging.error(f"[StopLoss] Failed to execute stop-loss for {order.order_id}")
+                    except Exception as e:
+                        logging.error(f"[StopLoss] Exception in stop-loss for {order.order_id}: {e}")
+                    return
+
+                time.sleep(self.poll_interval)
+
+        # Spawn the stop-loss thread
+        t = threading.Thread(target=_stop_loss_thread, daemon=True)
+        t.start()
+        return t
+
+
     def add_order(self, order: Order, mode: str = "ws") -> str:
         """
         Add an order to be executed once its trigger is met.

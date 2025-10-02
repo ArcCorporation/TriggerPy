@@ -17,6 +17,16 @@ class GeneralApp:
         self._connected = False
         self._watchers = set()
 
+    def place_custom_order(self, order) -> bool:
+        """
+        Proxy to TWS place_custom_order.
+        Prevents models from touching self._tws directly.
+        """
+        if not self._tws:
+            logging.info("TWS NOT CONNECTED ERR PLACING ORDER")
+            return False
+        return self._tws.place_custom_order(order)
+
     def watch_price(self, symbol, update_fn):
         watcher = PriceWatcher(symbol, update_fn, polygon_service)
         return watcher
@@ -248,7 +258,7 @@ class AppModel:
         )
 
         if not trigger_price or order.is_triggered(current_price):
-            success = general_app.tws.place_custom_order(order)
+            success = general_app.place_custom_order(order)
             if success:
                 order.mark_active(result=f"IB Order ID: {getattr(order, '_ib_order_id', 'Unknown')}")
                 logging.info(f"AppModel[{self._symbol}]: Order executed {order.order_id}")
