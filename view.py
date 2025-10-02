@@ -170,7 +170,7 @@ class OrderFrame(tk.Frame):
         self.combo_maturity.grid(row=2, column=3, padx=5)
         self.combo_maturity.bind("<<ComboboxSelected>>", self.on_maturity_selected)
 
-        # --- Qty (kept for now, can be hidden later) + SL + TP ---
+        # --- Qty + SL + TP ---
         ttk.Label(self, text="Qty").grid(row=3, column=2)
         self.entry_qty = ttk.Entry(self, width=8)
         self.entry_qty.grid(row=3, column=3, padx=5)
@@ -214,7 +214,7 @@ class OrderFrame(tk.Frame):
         self._set_status(f"Ready: {symbol}", "blue")
         self.btn_save.config(state="normal")
 
-        # price + prefill trigger off-thread
+        # price + prefill trigger + quantity off-thread
         def price_worker():
             try:
                 price = self.model.refresh_market_price()
@@ -225,9 +225,18 @@ class OrderFrame(tk.Frame):
                 if token != self._symbol_token:
                     return
                 if price:
+                    # trigger
                     trigger_price = price + 0.10 if self.var_type.get() == "CALL" else price - 0.10
                     self.entry_trigger.delete(0, tk.END)
                     self.entry_trigger.insert(0, f"{trigger_price:.2f}")
+                    # quantity from position size
+                    try:
+                        pos_size = float(self.entry_pos_size.get() or 2000)
+                        qty = self.model.calculate_quantity(pos_size, price)
+                        self.entry_qty.delete(0, tk.END)
+                        self.entry_qty.insert(0, str(qty))
+                    except Exception as e:
+                        logging.error(f"Quantity calc error: {e}")
             self._ui(apply)
         threading.Thread(target=price_worker, daemon=True).start()
 
