@@ -48,6 +48,8 @@ class ArcTriggerApp(tk.Tk):
 
         self.order_frames = []
         self.debug_frame = None
+        self.disconnect_services()
+        self.connect_services()
 
     # --- Connection handling ---
     def connect_services(self):
