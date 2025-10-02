@@ -276,11 +276,18 @@ class OrderWaitService:
                 msg = f"[WaitService] Order finalized {order_id} → IB ID: {order._ib_order_id}"
                 logging.info(msg)
                 watcher_info.update_watcher(order_id, STATUS_FINALIZED)
+
+                # ✅ if stop-loss configured, launch stop-loss watcher
+                if order.trigger and order.sl_price:
+                    stop_loss_level = order.trigger - order.sl_price
+                    self.start_stop_loss_watcher(order, stop_loss_level)
+
             else:
                 order.mark_failed("Failed to place order with TWS")
                 msg = f"[WaitService] Order placement failed {order_id}"
                 logging.error(msg)
                 watcher_info.update_watcher(order_id, STATUS_FAILED)
+
         except Exception as e:
             order.mark_failed(str(e))
             msg = f"[WaitService] Finalize failed {order_id}: {e}"
