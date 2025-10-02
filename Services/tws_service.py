@@ -384,7 +384,7 @@ if __name__ == "__main__":
     print("Testing TWSService with Helpers.Order integration")
     
     # Import YOUR Order class
-    from Order import Order
+    from Helpers.Order import Order
     
     service = create_tws_service()
     
