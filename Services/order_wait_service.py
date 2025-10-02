@@ -2,6 +2,10 @@ import threading
 import time
 import logging
 from Helpers.Order import Order
+from Services.watcher_info import (
+    ThreadInfo, watcher_info,
+    STATUS_PENDING, STATUS_RUNNING, STATUS_FINALIZED, STATUS_CANCELLED, STATUS_FAILED
+)
 
 
 class OrderWaitService:
@@ -26,6 +30,11 @@ class OrderWaitService:
         """
         order_id = order.order_id
 
+        # Register ThreadInfo
+        tinfo = ThreadInfo(order_id, order.symbol, watcher_type="trigger", mode=mode)
+        watcher_info.add_watcher(tinfo)
+        tinfo.update_status(STATUS_RUNNING)
+
         if mode == "ws":
             # Original WS path
             self.polygon.subscribe(
@@ -37,9 +46,40 @@ class OrderWaitService:
 
         elif mode == "poll":
             # Old-school polling thread path
+            def _poll_snapshot(order_id: str, order: Order, tinfo: ThreadInfo):
+                try:
+                    while True:
+                        with self.lock:
+                            if order_id not in self.pending_orders or order_id in self.cancelled_orders:
+                                return
+                        snap = self.polygon.get_snapshot(order.symbol)
+                        if not snap:
+                            time.sleep(self.poll_interval)
+                            continue
+
+                        last_price = snap.get("last")
+                        msg = f"[WaitService] Poll {order.symbol} → {last_price}"
+                        logging.info(msg)
+                        print(msg)
+
+                        if last_price:
+                            tinfo.update_status(STATUS_RUNNING, last_price=last_price)
+
+                        if last_price and order.is_triggered(last_price):
+                            self._finalize_order(order_id, order)
+                            tinfo.update_status(STATUS_FINALIZED, last_price=last_price)
+                            with self.lock:
+                                if order_id in self.pending_orders:
+                                    del self.pending_orders[order_id]
+                            return
+
+                        time.sleep(self.poll_interval)
+                except Exception as e:
+                    tinfo.update_status(STATUS_FAILED, info={"error": str(e)})
+
             t = threading.Thread(
-                target=self._poll_snapshot,
-                args=(order_id, order),
+                target=_poll_snapshot,
+                args=(order_id, order, tinfo),
                 daemon=True
             )
             t.start()
@@ -54,60 +94,74 @@ class OrderWaitService:
             )
             return None
 
-
     def start_stop_loss_watcher(self, order: Order, stop_loss_price: float):
         """
         Start a dedicated thread to monitor stop-loss for an active order.
         If price falls to or below stop_loss_price, immediately sell/exit.
         """
+        order_id = order.order_id
+
+        # Register ThreadInfo
+        tinfo = ThreadInfo(order_id, order.symbol, watcher_type="stop_loss", mode="poll", stop_loss=stop_loss_price)
+        watcher_info.add_watcher(tinfo)
+        tinfo.update_status(STATUS_RUNNING)
+
         def _stop_loss_thread():
-            logging.info(f"[StopLoss] Watching {order.symbol} stop-loss @ {stop_loss_price}")
-            while True:
-                # Exit conditions
-                if order.state not in ("ACTIVE", "PENDING"):
-                    logging.info(f"[StopLoss] Order {order.order_id} no longer active, stopping watcher.")
-                    return
+            try:
+                logging.info(f"[StopLoss] Watching {order.symbol} stop-loss @ {stop_loss_price}")
+                while True:
+                    if order.state not in ("ACTIVE", "PENDING"):
+                        logging.info(f"[StopLoss] Order {order.order_id} no longer active, stopping watcher.")
+                        tinfo.update_status(STATUS_CANCELLED)
+                        return
 
-                snap = self.polygon.get_snapshot(order.symbol)
-                if not snap:
+                    snap = self.polygon.get_snapshot(order.symbol)
+                    if not snap:
+                        time.sleep(self.poll_interval)
+                        continue
+
+                    last_price = snap.get("last")
+                    logging.info(f"[StopLoss] Poll {order.symbol} → {last_price}, stop={stop_loss_price}")
+
+                    if last_price:
+                        tinfo.update_status(STATUS_RUNNING, last_price=last_price)
+
+                    if last_price and last_price <= stop_loss_price:
+                        try:
+                            # Execute SELL to exit position
+                            sell_order = Order(
+                                symbol=order.symbol,
+                                expiry=order.expiry,
+                                strike=order.strike,
+                                right=order.right,
+                                qty=order.qty,
+                                entry_price=last_price,
+                                tp_price=None,
+                                sl_price=stop_loss_price,
+                                action="SELL",
+                                trigger=None
+                            )
+                            success = self.tws.place_custom_order(sell_order)
+                            if success:
+                                sell_order.mark_active(result=f"Stop-loss triggered @ {last_price}")
+                                logging.info(f"[StopLoss] Order {order.order_id} exited via stop-loss at {last_price}")
+                                tinfo.update_status(STATUS_FINALIZED, last_price=last_price)
+                            else:
+                                logging.error(f"[StopLoss] Failed to execute stop-loss for {order.order_id}")
+                                tinfo.update_status(STATUS_FAILED, last_price=last_price)
+                        except Exception as e:
+                            logging.error(f"[StopLoss] Exception in stop-loss for {order.order_id}: {e}")
+                            tinfo.update_status(STATUS_FAILED, info={"error": str(e)})
+                        return
+
                     time.sleep(self.poll_interval)
-                    continue
-
-                last_price = snap.get("last")
-                logging.info(f"[StopLoss] Poll {order.symbol} → {last_price}, stop={stop_loss_price}")
-
-                if last_price and last_price <= stop_loss_price:
-                    try:
-                        # Execute SELL to exit position
-                        sell_order = Order(
-                            symbol=order.symbol,
-                            expiry=order.expiry,
-                            strike=order.strike,
-                            right=order.right,
-                            qty=order.qty,
-                            entry_price=last_price,
-                            tp_price=None,
-                            sl_price=stop_loss_price,
-                            action="SELL",
-                            trigger=None
-                        )
-                        success = self.tws.place_custom_order(sell_order)
-                        if success:
-                            sell_order.mark_active(result=f"Stop-loss triggered @ {last_price}")
-                            logging.info(f"[StopLoss] Order {order.order_id} exited via stop-loss at {last_price}")
-                        else:
-                            logging.error(f"[StopLoss] Failed to execute stop-loss for {order.order_id}")
-                    except Exception as e:
-                        logging.error(f"[StopLoss] Exception in stop-loss for {order.order_id}: {e}")
-                    return
-
-                time.sleep(self.poll_interval)
+            except Exception as e:
+                tinfo.update_status(STATUS_FAILED, info={"error": str(e)})
 
         # Spawn the stop-loss thread
         t = threading.Thread(target=_stop_loss_thread, daemon=True)
         t.start()
         return t
-
 
     def add_order(self, order: Order, mode: str = "ws") -> str:
         """
@@ -119,7 +173,7 @@ class OrderWaitService:
         with self.lock:
             self.pending_orders[order_id] = order
 
-        # ✅ IMMEDIATE TRIGGER CHECK - Execute immediately if condition already met
+        # ✅ IMMEDIATE TRIGGER CHECK
         current_price = self.polygon.get_last_trade(order.symbol)
         if current_price and order.is_triggered(current_price):
             logging.info(
@@ -131,13 +185,12 @@ class OrderWaitService:
 
         # Subscribe / start poller only if trigger not already met
         if mode == "ws":
-            # Original path (keep old logic)
             self.polygon.subscribe(
                 order.symbol,
                 lambda price, oid=order_id: self._on_tick(oid, price)
             )
         else:
-            thread = self.start_trigger_watcher(order, mode)
+            self.start_trigger_watcher(order, mode)
 
         msg = (
             f"[WaitService] Order added {order_id} "
@@ -147,10 +200,7 @@ class OrderWaitService:
         return order_id
 
     def cancel_order(self, order_id: str):
-        """
-        Cancel an order. Removes it from pending set and unsubscribes from Polygon.
-        (Keeps original behavior)
-        """
+        """Cancel an order. Removes it from pending set and unsubscribes from Polygon."""
         with self.lock:
             if order_id in self.pending_orders:
                 order = self.pending_orders[order_id]
@@ -158,7 +208,6 @@ class OrderWaitService:
                 self.cancelled_orders.add(order_id)
                 del self.pending_orders[order_id]
 
-                # Unsubscribe from Polygon feed for this symbol (ws mode)
                 try:
                     self.polygon.unsubscribe(order.symbol)
                 except Exception as e:
@@ -168,31 +217,21 @@ class OrderWaitService:
                 logging.info(msg)
 
     def list_pending_orders(self):
-        """Return all pending orders as dicts. (kept as-is)"""
         with self.lock:
             return [o.to_dict() for o in self.pending_orders.values()]
 
     def _on_tick(self, order_id: str, price: float):
-        """
-        Callback from PolygonService for live ticks.
-        Checks if trigger condition is met and finalizes the order.
-        (kept as-is)
-        """
+        """Callback from PolygonService for live ticks."""
         with self.lock:
-            # Make sure order is still pending and not cancelled
             order = self.pending_orders.get(order_id)
             if not order or order_id in self.cancelled_orders:
                 return
 
-        # Debug log
         msg = f"[WaitService] Tick received for {order.symbol} @ {price}, trigger={order.trigger}"
         logging.info(msg)
 
-        # Check if trigger is satisfied
         if order.is_triggered(price):
             self._finalize_order(order_id, order)
-
-            # After finalizing, unsubscribe to stop receiving ticks
             try:
                 self.polygon.unsubscribe(order.symbol)
             except Exception as e:
@@ -203,14 +242,11 @@ class OrderWaitService:
                     del self.pending_orders[order_id]
 
     def _poll_snapshot(self, order_id: str, order: Order):
-        """
-        Alternate mode: continuously poll snapshot until trigger/cancel.
-        (new feature; does NOT remove original ws path)
-        """
+        """Alternate mode: continuously poll snapshot until trigger/cancel."""
         while True:
             with self.lock:
                 if order_id not in self.pending_orders or order_id in self.cancelled_orders:
-                    return  # cancelled/removed
+                    return
 
             snap = self.polygon.get_snapshot(order.symbol)
             if not snap:
@@ -220,7 +256,7 @@ class OrderWaitService:
             last_price = snap.get("last")
             msg = f"[WaitService] Poll {order.symbol} → {last_price}"
             logging.info(msg)
-            print(msg)  # kept from your latest patch
+            print(msg)
 
             if last_price and order.is_triggered(last_price):
                 self._finalize_order(order_id, order)
@@ -232,65 +268,47 @@ class OrderWaitService:
             time.sleep(self.poll_interval)
 
     def _finalize_order(self, order_id: str, order: Order):
-        """
-        Sends the order to TWS using the new TWSService.
-        (kept from original)
-        """
+        """Sends the order to TWS using the new TWSService."""
         try:
-            # Use the new TWSService method
             success = self.tws.place_custom_order(order)
-
             if success:
                 order.mark_active(result=f"IB Order ID: {order._ib_order_id}")
                 msg = f"[WaitService] Order finalized {order_id} → IB ID: {order._ib_order_id}"
                 logging.info(msg)
+                watcher_info.update_watcher(order_id, STATUS_FINALIZED)
             else:
                 order.mark_failed("Failed to place order with TWS")
                 msg = f"[WaitService] Order placement failed {order_id}"
                 logging.error(msg)
-
+                watcher_info.update_watcher(order_id, STATUS_FAILED)
         except Exception as e:
             order.mark_failed(str(e))
             msg = f"[WaitService] Finalize failed {order_id}: {e}"
             logging.error(msg)
+            watcher_info.update_watcher(order_id, STATUS_FAILED, info={"error": str(e)})
 
     def get_order_status(self, order_id: str):
-        """
-        Get the current status of an order from TWSService.
-        (kept as-is)
-        """
         return self.tws.get_order_status(order_id)
 
     def cancel_active_order(self, order_id: str) -> bool:
-        """
-        Cancel an order that has already been sent to TWS.
-        (kept as-is)
-        """
         try:
-            # First try to cancel via TWS if it's an active order
             if self.tws.cancel_custom_order(order_id):
-                # Also remove from our tracking
                 self.cancel_order(order_id)
+                watcher_info.update_watcher(order_id, STATUS_CANCELLED)
                 return True
             return False
         except Exception as e:
             logging.error(f"[WaitService] Cancel active order failed {order_id}: {e}")
+            watcher_info.update_watcher(order_id, STATUS_FAILED, info={"error": str(e)})
             return False
 
     def get_all_orders_status(self):
-        """
-        Get status for all orders (pending and active).
-        (kept as-is)
-        """
         result = {
             'pending': self.list_pending_orders(),
             'active': {}
         }
-
-        # Get status for orders that have been sent to TWS
         for order_id in list(self.pending_orders.keys()):
             status = self.get_order_status(order_id)
             if status:
                 result['active'][order_id] = status
-
         return result
