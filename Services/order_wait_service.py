@@ -19,6 +19,42 @@ class OrderWaitService:
         # Polling interval for alternate mode (seconds), e.g. 0.1s = 100ms
         self.poll_interval = poll_interval
 
+    def start_trigger_watcher(self, order: Order, mode: str = "poll") -> threading.Thread:
+        """
+        Start a dedicated thread (or ws subscription) to watch trigger price for an order.
+        When trigger condition is met, finalize order via TWS.
+        """
+        order_id = order.order_id
+
+        if mode == "ws":
+            # Original WS path
+            self.polygon.subscribe(
+                order.symbol,
+                lambda price, oid=order_id: self._on_tick(oid, price)
+            )
+            logging.info(f"[TriggerWatcher] Started WS watcher for {order.symbol} (order {order_id})")
+            return None  # no thread object for ws
+
+        elif mode == "poll":
+            # Old-school polling thread path
+            t = threading.Thread(
+                target=self._poll_snapshot,
+                args=(order_id, order),
+                daemon=True
+            )
+            t.start()
+            logging.info(f"[TriggerWatcher] Started polling watcher for {order.symbol} (order {order_id})")
+            return t
+
+        else:
+            logging.warning(f"[TriggerWatcher] Unknown mode '{mode}', defaulting to 'ws'")
+            self.polygon.subscribe(
+                order.symbol,
+                lambda price, oid=order_id: self._on_tick(oid, price)
+            )
+            return None
+
+
     def start_stop_loss_watcher(self, order: Order, stop_loss_price: float):
         """
         Start a dedicated thread to monitor stop-loss for an active order.
@@ -100,20 +136,8 @@ class OrderWaitService:
                 order.symbol,
                 lambda price, oid=order_id: self._on_tick(oid, price)
             )
-        elif mode == "poll":
-            # Alternate polling path (new feature)
-            t = threading.Thread(
-                target=self._poll_snapshot,
-                args=(order_id, order),
-                daemon=True
-            )
-            t.start()
         else:
-            logging.warning(f"[WaitService] Unknown mode '{mode}', defaulting to 'ws'")
-            self.polygon.subscribe(
-                order.symbol,
-                lambda price, oid=order_id: self._on_tick(oid, price)
-            )
+            thread = self.start_trigger_watcher(order, mode)
 
         msg = (
             f"[WaitService] Order added {order_id} "
