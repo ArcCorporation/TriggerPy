@@ -347,7 +347,7 @@ class OrderFrame(tk.Frame):
                     self.model._take_profit = tp
 
                 order_data = self.model.place_option_order(
-                    action="BUY", position_size=position_size, quantity=quantity, trigger_price=trigger
+                    action="BUY", quantity=quantity, trigger_price=trigger
                 )
                 state = order_data.get("state", "UNKNOWN")
                 msg = f"Order {state}: {order_data.get('order_id')}"
