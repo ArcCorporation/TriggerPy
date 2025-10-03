@@ -288,30 +288,30 @@ class TWSService(EWrapper, EClient):
         contract.currency = currency
         return contract
     
-        def get_option_chain(self, symbol: str, expiry: str, exchange: str = "SMART", currency: str = "USD",
-                         timeout: int = 10) -> Optional[List[Dict]]:
-            """
-            Build a basic option chain for a given symbol and expiry.
-            Returns a list of dicts with strike/right.
-            """
-            try:
-                maturities = self.get_maturities(symbol, exchange, currency, timeout)
-                if not maturities:
-                    return []
-
-                if expiry not in maturities['expirations']:
-                    logging.error(f"TWSService: expiry {expiry} not in available expirations for {symbol}")
-                    return []
-
-                strikes = maturities.get('strikes', [])
-                chain = []
-                for strike in strikes:
-                    chain.append({"expiry": expiry, "strike": strike, "right": "C"})
-                    chain.append({"expiry": expiry, "strike": strike, "right": "P"})
-                return chain
-            except Exception as e:
-                logging.error(f"TWSService: Failed to build option chain for {symbol}: {e}")
+    def get_option_chain(self, symbol: str, expiry: str, exchange: str = "SMART", currency: str = "USD",
+                        timeout: int = 10) -> Optional[List[Dict]]:
+        """
+        Build a basic option chain for a given symbol and expiry.
+        Returns a list of dicts with strike/right.
+        """
+        try:
+            maturities = self.get_maturities(symbol, exchange, currency, timeout)
+            if not maturities:
                 return []
+
+            if expiry not in maturities['expirations']:
+                logging.error(f"TWSService: expiry {expiry} not in available expirations for {symbol}")
+                return []
+
+            strikes = maturities.get('strikes', [])
+            chain = []
+            for strike in strikes:
+                chain.append({"expiry": expiry, "strike": strike, "right": "C"})
+                chain.append({"expiry": expiry, "strike": strike, "right": "P"})
+            return chain
+        except Exception as e:
+            logging.error(f"TWSService: Failed to build option chain for {symbol}: {e}")
+            return []
 
 
     def place_custom_order(self, custom_order, account: str = "") -> bool:
