@@ -337,6 +337,9 @@ class OrderFrame(tk.Frame):
         def worker():
             try:
                 strike = round(self.model.refresh_market_price())
+                # yukarıya yuvarla 5'in katına
+                if strike % 5 != 0:
+                    strike += (5 - (strike % 5))
                 self.model.set_option_contract(maturity, strike, right)
                 if sl is not None:
                     self.model._stop_loss = sl
