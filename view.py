@@ -157,12 +157,17 @@ class OrderFrame(tk.Frame):
         self.entry_pos_size.grid(row=2, column=1, padx=5)
         self.entry_pos_size.insert(0, "2000")
 
+        # Bind events for manual typing
+        self.entry_pos_size.bind("<KeyRelease>", lambda e: self.recalc_quantity())
+        self.entry_pos_size.bind("<FocusOut>", lambda e: self.recalc_quantity())
+
         frame_pos_btns = ttk.Frame(self)
         frame_pos_btns.grid(row=3, column=0, columnspan=2, pady=2)
         for val in [500, 1000, 2000, 5000]:
-            ttk.Button(frame_pos_btns, text=str(val),
-                       command=lambda v=val: self.entry_pos_size.delete(0, tk.END) or self.entry_pos_size.insert(0, str(v))
-                      ).pack(side="left", padx=2)
+            ttk.Button(
+                frame_pos_btns, text=str(val),
+                command=lambda v=val: self._set_pos_and_recalc(v)
+            ).pack(side="left", padx=2)
 
         # --- Maturity ---
         ttk.Label(self, text="Maturity").grid(row=2, column=2)
@@ -176,13 +181,24 @@ class OrderFrame(tk.Frame):
         self.entry_qty.grid(row=3, column=3, padx=5)
         self.entry_qty.insert(0, "1")
 
+        # --- Stop Loss ---
         ttk.Label(self, text="Stop Loss").grid(row=3, column=4)
         self.entry_sl = ttk.Entry(self, width=8)
         self.entry_sl.grid(row=3, column=5, padx=5)
 
-        ttk.Label(self, text="Take Profit").grid(row=3, column=6)
+        frame_sl_btns = ttk.Frame(self)
+        frame_sl_btns.grid(row=3, column=6, columnspan=2, padx=5)
+        for val in [0.25, 0.50, 1.00, 2.00]:
+            ttk.Button(
+                frame_sl_btns, text=str(val),
+                command=lambda v=val: self._set_stop_loss(v)
+            ).pack(side="left", padx=2)
+
+        ttk.Label(self, text="Take Profit").grid(row=3, column=8)
         self.entry_tp = ttk.Entry(self, width=8)
-        self.entry_tp.grid(row=3, column=7, padx=5)
+        self.entry_tp.grid(row=3, column=9, padx=5)
+
+        
 
         # --- Controls ---
         frame_ctrl = ttk.Frame(self)
@@ -195,8 +211,32 @@ class OrderFrame(tk.Frame):
         # --- Status ---
         self.lbl_status = ttk.Label(self, text="Select symbol to start", foreground="gray")
         self.lbl_status.grid(row=5, column=0, columnspan=9, pady=5)
-
     # ---------- helpers ----------
+
+    def _set_stop_loss(self, value: float):
+        """Set Stop Loss entry directly to offset value (no math here)."""
+        self.entry_sl.delete(0, tk.END)
+        self.entry_sl.insert(0, str(value))
+
+
+    def _set_pos_and_recalc(self, value: float):
+        """Set position size from quick button and recalc quantity."""
+        self.entry_pos_size.delete(0, tk.END)
+        self.entry_pos_size.insert(0, str(value))
+        self.recalc_quantity()
+
+    def recalc_quantity(self):
+        """Recalculate Qty from current position size + last price."""
+        if not self.model:
+            return
+        try:
+            price = self.model.refresh_market_price()
+            pos_size = float(self.entry_pos_size.get() or 2000)
+            qty = self.model.calculate_quantity(pos_size, price)
+            self.entry_qty.delete(0, tk.END)
+            self.entry_qty.insert(0, str(qty))
+        except Exception as e:
+            logging.error(f"Quantity recalc error: {e}")
     def _ui(self, fn, *args, **kwargs):
         """Thread-safe UI update."""
         self.after(0, lambda: fn(*args, **kwargs))
