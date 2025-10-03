@@ -17,6 +17,15 @@ class GeneralApp:
         self._connected = False
         self._watchers = set()
 
+    def get_option_chain(self, symbol: str, expiry: str):
+        """
+        Wrapper around TWSService.get_option_chain.
+        Models call this, never touch TWSService directly.
+        """
+        if not self._tws:
+            raise RuntimeError("GeneralApp: TWS not connected")
+        return self._tws.get_option_chain(symbol, expiry)
+
     def place_custom_order(self, order) -> bool:
         """
         Proxy to TWS place_custom_order.
@@ -196,7 +205,9 @@ class AppModel:
 
     def get_option_chain(self, expiry: str):
         try:
-            return general_app.tws.get_option_chain(self._symbol, expiry=expiry) or []
+            if not general_app.tws:
+                raise RuntimeError("TWS not connected")
+            return general_app.get_option_chain(self._symbol, expiry=expiry) or []
         except Exception as e:
             logging.error(f"AppModel[{self._symbol}]: Failed to get option chain: {e}")
             return []
