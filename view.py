@@ -336,7 +336,8 @@ class OrderFrame(tk.Frame):
 
         def worker():
             try:
-                self.model.set_option_contract(maturity, None, right)
+                strike = round(self._last_price)
+                self.model.set_option_contract(maturity, strike, right)
                 if sl is not None:
                     self.model._stop_loss = sl
                 if tp is not None:
