@@ -7,7 +7,7 @@ from Helpers.debugger import DebugFrame, TkinterHandler
 
 from model import general_app
 from view import Banner, OrderFrame
-
+from Services.watcher_info import watcher_info
 
 class ArcTriggerApp(tk.Tk):
     def __init__(self):
@@ -42,6 +42,9 @@ class ArcTriggerApp(tk.Tk):
         self.btn_debug = tk.Button(top_frame, text="Show Debug", command=self.toggle_debug)
         self.btn_debug.pack(side="left", padx=10)
 
+        # watchers button
+        ttk.Button(top_frame, text="Watchers", command=self.show_watchers).pack(side="left", padx=5)
+
         # Order frame container
         self.order_container = ttk.Frame(self)
         self.order_container.pack(fill="both", expand=True)
@@ -50,6 +53,43 @@ class ArcTriggerApp(tk.Tk):
         self.debug_frame = None
         self.disconnect_services()
         self.connect_services()
+
+
+    def show_watchers(self):
+        import tkinter as tk
+        from tkinter import ttk
+        
+
+        win = tk.Toplevel(self)
+        win.title("Active Watchers")
+        win.geometry("800x300")
+
+        cols = ("Order ID", "Symbol", "Type", "Mode", "Status", "StopLoss", "LastPrice", "StartTime")
+        tree = ttk.Treeview(win, columns=cols, show="headings")
+        for c in cols:
+            tree.heading(c, text=c)
+            tree.column(c, width=100, anchor="center")
+        tree.pack(fill="both", expand=True)
+
+        def refresh():
+            tree.delete(*tree.get_children())
+            for w in watcher_info.list_all():
+                tree.insert(
+                    "", "end",
+                    values=(
+                        w["order_id"],
+                        w["symbol"],
+                        w["watcher_type"],
+                        w["mode"],
+                        w["status_label"],
+                        w["stop_loss"],
+                        w["last_price"],
+                        w["start_time"][:19],  # trim seconds+ms
+                    )
+                )
+            win.after(2000, refresh)  # auto-refresh every 2s
+
+        refresh()
 
     # --- Connection handling ---
     def connect_services(self):
