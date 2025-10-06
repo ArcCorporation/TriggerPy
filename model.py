@@ -1,21 +1,67 @@
 import logging
 from typing import List, Dict, Optional, Tuple
-
+import uuid
 from Services.price_watcher import PriceWatcher
 from Services.tws_service import create_tws_service
 from Services.polygon_service import polygon_service
 from Services.order_wait_service import OrderWaitService
 from Helpers.Order import Order, OrderState
-from persistence import save_ticket
-
+import random
 # --- Singleton: GeneralApp ---
 class GeneralApp:
     def __init__(self):
+        
         self._tws = None
         self._polygon = None
         self._order_wait = None
         self._connected = False
-        self._watchers = set()
+        self._models = set()
+
+    def save(self, filename: Optional[str] = None) -> str:
+        """
+        Persist current _models to disk.
+        If filename is None, generate Arc_N.txt with N in 0..1000.
+        Returns the filename actually used.
+        """
+        if filename is None:
+            filename = f"Arc_{random.randint(0, 1000)}.txt"
+        with open(filename, "w") as f:
+            f.write(f"{len(self._models)}\n")
+            for m in self._models:
+                f.write(m.serialize() + "\n")
+        return filename
+
+    def load(self, filename: Optional[str] =  None) -> None:
+        """
+        Replace current _models with contents of file.
+        Clears existing models first.
+        """
+        if filename == None:
+            raise ValueError(f"[GeneralModel.load()]filename is None")
+        self._models.clear()
+        with open(filename) as f:
+            lines = [ln.rstrip("\n") for ln in f if ln.strip()]
+        if not lines:
+            raise ValueError("empty archive")
+        n = int(lines[0])
+        for raw in lines[1 : 1 + n]:
+            if not raw.startswith("AppModel:"):
+                continue
+            _, mid, odata = raw.split(":", 2)
+            m = AppModel("UNKNOWN")      # symbol will be fixed later if needed
+            m._id = mid
+            m._order = Order.deserialize(odata) if odata != "None" else None
+            self._models.add(m)
+        
+
+    def add_model(self,model: "AppModel"):
+        self._models.add(model)
+
+    def get_models(self):
+        return list(self._models)
+    
+    def serialize(self):
+        pass
 
     def cancel_order(self,order_id):
         self.order_wait.cancel_order(order_id)
@@ -118,6 +164,7 @@ general_app = GeneralApp()
 # --- Per-symbol model ---
 class AppModel:
     def __init__(self, symbol: str):
+        self._id = str(uuid.uuid4())
         self._symbol = symbol.upper()
         self._underlying_price: Optional[float] = None
         self._expiry: Optional[str] = None
@@ -126,6 +173,10 @@ class AppModel:
         self._stop_loss: Optional[float] = None
         self._take_profit: Optional[float] = None
         self._order: Optional[Order] = None
+
+    
+    def serialize(self):
+        pass
 
     @property
     def symbol(self) -> str:
