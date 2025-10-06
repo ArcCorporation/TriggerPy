@@ -288,7 +288,20 @@ class OrderWaitService:
                 # ✅ if stop-loss configured, launch stop-loss watcher
                 if order.trigger and order.sl_price:
                     stop_loss_level = order.trigger - order.sl_price
-                    self.start_stop_loss_watcher(order, stop_loss_level)
+                    exit_order = Order(
+                        symbol=order.symbol,
+                        expiry=order.expiry,
+                        strike=order.strike,
+                        right=order.right,
+                        qty=order.qty,
+                        entry_price=order.entry_price,   # keeps breakeven reference
+                        tp_price=None,
+                        sl_price=order.sl_price,
+                        action="SELL",
+                        trigger=None
+                    )
+                    ex_order = exit_order.set_position_size(order._position_size) 
+                    self.start_stop_loss_watcher(ex_order, stop_loss_level)
 
             else:
                 order.mark_failed("Failed to place order with TWS")
