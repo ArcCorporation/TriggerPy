@@ -52,6 +52,10 @@ class GeneralApp:
             m._id = mid
             m._order = Order.deserialize(odata) if odata != "None" else None
             self._models.add(m)
+
+        for model in self._models:
+            if model.order() != None:
+                self._order_wait.add_order(model.order(), "poll")
         
 
     def add_model(self,model: "AppModel"):
@@ -174,6 +178,7 @@ class AppModel:
         self._take_profit: Optional[float] = None
         self._order: Optional[Order] = None
 
+
     
     def serialize(self):
         pass
@@ -181,6 +186,10 @@ class AppModel:
     @property
     def symbol(self) -> str:
         return self._symbol
+    
+    @property
+    def order(self):
+        return self._order
 
     def refresh_market_price(self) -> Optional[float]:
         try:
