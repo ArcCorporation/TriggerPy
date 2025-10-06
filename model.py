@@ -307,7 +307,7 @@ class AppModel:
         if not self._validate_breakout_trigger(trigger_price, current_price):
             raise ValueError(f"Trigger {trigger_price} invalid for current price {current_price}")
 
-        entry_price = 0.10
+        entry_price = trigger_price
         try:
             entry_price = self.get_option_price(self._expiry, self._strike, self._right)
         except Exception:
