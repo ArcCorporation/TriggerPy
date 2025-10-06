@@ -97,7 +97,8 @@ class OrderWaitService:
     def start_stop_loss_watcher(self, order: Order, stop_loss_price: float):
         """
         Start a dedicated thread to monitor stop-loss for an active order.
-        If price falls to or below stop_loss_price, immediately sell/exit.
+        For CALL:  exit if price <= stop_loss_price
+        For PUT:   exit if price >= stop_loss_price
         """
         order_id = order.order_id
 
@@ -108,7 +109,7 @@ class OrderWaitService:
 
         def _stop_loss_thread():
             try:
-                logging.info(f"[StopLoss] Watching {order.symbol} stop-loss @ {stop_loss_price}")
+                logging.info(f"[StopLoss] Watching {order.symbol} stop-loss @ {stop_loss_price}  ({order.right})")
                 while True:
                     if order.state not in ("ACTIVE", "PENDING"):
                         logging.info(f"[StopLoss] Order {order.order_id} no longer active, stopping watcher.")
@@ -126,9 +127,16 @@ class OrderWaitService:
                     if last_price:
                         tinfo.update_status(STATUS_RUNNING, last_price=last_price)
 
-                    if last_price and last_price <= stop_loss_price:
+                    # ----- right-aware trigger -----
+                    if order.right in ("P", "PUT"):
+                        triggered = last_price >= stop_loss_price   # PUT: rise = loss
+                    else:
+                        triggered = last_price <= stop_loss_price   # CALL: fall = loss
+                    # --------------------------------
+
+                    if triggered:
                         try:
-                            # Execute SELL to exit position
+                            # Market-sell the full position
                             sell_order = Order(
                                 symbol=order.symbol,
                                 expiry=order.expiry,

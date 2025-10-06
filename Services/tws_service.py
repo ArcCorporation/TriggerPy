@@ -345,6 +345,12 @@ class TWSService(EWrapper, EClient):
             # Use resolved contract
             contract.conId = conid
 
+            premium = self.get_option_premium(custom_order.symbol,custom_order.expiry,custom_order.strike, ib_right)
+            if not premium or premium <= 0:
+                raise RuntimeError(f"No live premium for {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right}")
+            qty = custom_order.calc_contracts_from_premium(premium)
+
+            custom_order.qty = qty
             # Convert your custom order to IB order
             ib_order = custom_order.to_ib_order(
                 order_type="LMT",
@@ -396,6 +402,57 @@ class TWSService(EWrapper, EClient):
         logging.info("Disconnecting from TWS...")
         self.connection_ready.clear()
         self.disconnect()
+    
+    def get_option_premium(self,
+                    symbol: str,
+                    expiry: str,
+                    strike: float,
+                    right: str,
+                    timeout: int = 3) -> Optional[float]:
+        """
+        Live premium for a *single* option contract.
+        Returns ask first, then bid, then mid; None if unavailable.
+        """
+        if not self.is_connected():
+            return None
+
+        # build option contract
+        contract = self.create_option_contract(symbol, expiry, strike, right)
+        conid = self.resolve_conid(contract)
+        if not conid:
+            return None
+        contract.conId = conid
+
+        req_id = self._get_next_req_id()
+        self._contract_details[req_id] = None
+        self._contract_details_event.clear()
+
+        # request market data snapshot (frozen tick)
+        tick_snapshot = {}
+        self.reqMktData(req_id, contract, "", True, False, [])   # snapshot = True
+
+        def tickPrice(reqId, tickType, price, attrib):
+            if reqId == req_id and price > 0:
+                tick_snapshot[tickType] = price
+                # 1 = bid, 2 = ask, 4 = last, 9 = close
+                if tickType in (1, 2):
+                    self.cancelMktData(req_id)   # got what we need
+                    self._contract_details_event.set()
+
+        # hook local callback for this request only
+        original_tick = self.tickPrice
+        self.tickPrice = tickPrice
+
+        if self._contract_details_event.wait(timeout):
+            self.tickPrice = original_tick   # restore
+            ask = tick_snapshot.get(2)       # 2 = ask
+            bid = tick_snapshot.get(1)       # 1 = bid
+            mid = (bid + ask) / 2 if (bid and ask) else None
+            return ask or bid or mid or None
+
+        # timeout
+        self.tickPrice = original_tick
+        return None
 
 
 def create_tws_service(host: str = '127.0.0.1', port: int = 7497, client_id: Optional[int] = None) -> TWSService:
@@ -403,6 +460,8 @@ def create_tws_service(host: str = '127.0.0.1', port: int = 7497, client_id: Opt
     if client_id is not None:
         service.client_id = client_id
     return service
+
+
 
 
 # Test the service

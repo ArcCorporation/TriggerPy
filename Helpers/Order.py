@@ -1,3 +1,4 @@
+from typing import Optional
 import uuid
 import enum
 from ibapi.order import Order as IBOrder  # import IB's order class
@@ -13,11 +14,13 @@ class OrderState(enum.Enum):
 class Order:
     def __init__(self, symbol, expiry, strike, right,
                  qty, entry_price, tp_price, sl_price,
-                 action="BUY", trigger=None):
+                 action="BUY", type = "LMT",trigger=None):
         """
         Temel Order nesnesi.
         """
         self.order_id = str(uuid.uuid4())
+        self._position_size: Optional[float] = None   # dollars
+        self.type = type
         self.symbol = symbol
         self.expiry = expiry
         self.strike = strike
@@ -43,6 +46,22 @@ class Order:
         elif self.right == "PUT"or self.right == "P":
             return market_price < self.trigger
         return False
+    
+    def calc_contracts_from_premium(self, premium: float) -> int:
+        """Compute integer contracts that fit budget at *live* premium."""
+        if self._position_size is None:
+            raise RuntimeError("Position size not set")
+        if premium <= 0:
+            raise ValueError("Premium must be > 0")
+        contracts = int(self._position_size // (premium * 100))
+        return max(1, contracts)          # at least 1 contract
+
+    def set_position_size(self, dollars: float) -> "Order":
+        """Attach dollar budget and return self for chaining."""
+        if dollars <= 0:
+            raise ValueError("Position size must be > 0")
+        self._position_size = dollars
+        return self
 
     def mark_active(self, result=None):
         self.state = OrderState.ACTIVE
@@ -71,6 +90,18 @@ class Order:
             "state": self.state.value,
             "result": self.result,
         }
+    
+    def move_stop_to_breakeven(self) -> bool:
+        """
+        Set stop loss to entry_price (breakeven).
+        Returns True if updated, False if already at breakeven or no SL.
+        """
+        if self.sl_price is None:
+            return False
+        if self.sl_price == self.entry_price:
+            return False
+        self.sl_price = self.entry_price
+        return True
 
     def to_ib_order(self, order_type="LMT", limit_price=None, stop_price=None,
                     parent_id=None, transmit=True) -> IBOrder:

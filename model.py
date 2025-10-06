@@ -6,7 +6,7 @@ from Services.tws_service import create_tws_service
 from Services.polygon_service import polygon_service
 from Services.order_wait_service import OrderWaitService
 from Helpers.Order import Order, OrderState
-
+from persistence import save_ticket
 
 # --- Singleton: GeneralApp ---
 class GeneralApp:
@@ -232,7 +232,7 @@ class AppModel:
             return False
         return True
 
-    def place_option_order(self, action: str = "BUY", quantity: int = 1,
+    def place_option_order(self, action: str = "BUY", position: int = 2000,quantity: int = 1,
                            trigger_price: Optional[float] = None) -> Dict:
         if not all([self._symbol, self._expiry, self._strike, self._right]):
             raise ValueError("Option parameters not set")
@@ -268,6 +268,8 @@ class AppModel:
             trigger=trigger_price
         )
 
+        order.set_position_size(float(position))
+
         if not trigger_price or order.is_triggered(current_price):
             success = general_app.place_custom_order(order)
             if success:
@@ -281,6 +283,7 @@ class AppModel:
             logging.info(f"AppModel[{self._symbol}]: Order waiting breakout {order.order_id}")
 
         self._orders.append(order)
+        save_ticket({**order.to_dict(), "id": order.order_id})
         return order.to_dict()
 
     def get_available_strikes(self, expiry: str) -> List[float]:
