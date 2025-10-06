@@ -17,6 +17,9 @@ class GeneralApp:
         self._connected = False
         self._watchers = set()
 
+    def cancel_order(self,order_id):
+        self.order_wait.cancel_order(order_id)
+
     def get_option_chain(self, symbol: str, expiry: str):
         """
         Wrapper around TWSService.get_option_chain.
@@ -122,7 +125,7 @@ class AppModel:
         self._right: Optional[str] = None
         self._stop_loss: Optional[float] = None
         self._take_profit: Optional[float] = None
-        self._orders: List[Order] = []
+        self._order: Optional[Order] = None
 
     @property
     def symbol(self) -> str:
@@ -282,7 +285,7 @@ class AppModel:
             general_app.order_wait.add_order(order, mode="poll")
             logging.info(f"AppModel[{self._symbol}]: Order waiting breakout {order.order_id}")
 
-        self._orders.append(order)
+        self._order = order
         #save_ticket({**order.to_dict(), "id": order.order_id})
         return order.to_dict()
 
@@ -295,18 +298,16 @@ class AppModel:
             return []
 
     def cancel_pending_order(self, order_id: str) -> bool:
-        for order in self._orders:
-            if order.order_id == order_id and order.state == OrderState.PENDING:
-                general_app.order_wait.cancel_order(order_id)
-                order.mark_cancelled()
-                logging.info(f"AppModel[{self._symbol}]: Order cancelled {order_id}")
-                return True
+        order = self._order
+        if order.order_id == order_id and order.state == OrderState.PENDING:
+            general_app.cancel_order(order_id)
+            order.mark_cancelled()
+            logging.info(f"AppModel[{self._symbol}]: Order cancelled {order_id}")
+            return True
         return False
 
-    def get_orders(self, state_filter: Optional[str] = None) -> List[Dict]:
-        if state_filter:
-            return [o.to_dict() for o in self._orders if o.state.value == state_filter]
-        return [o.to_dict() for o in self._orders]
+    def get_order(self) -> Optional[Order]:
+        return self._order
 
     def reset(self):
         self._underlying_price = None
@@ -315,7 +316,7 @@ class AppModel:
         self._right = None
         self._stop_loss = None
         self._take_profit = None
-        self._orders.clear()
+        self._order = None
         logging.info(f"AppModel[{self._symbol}]: State reset")
 
     def get_state(self):
