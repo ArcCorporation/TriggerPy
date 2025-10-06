@@ -283,7 +283,7 @@ class AppModel:
             logging.info(f"AppModel[{self._symbol}]: Order waiting breakout {order.order_id}")
 
         self._orders.append(order)
-        save_ticket({**order.to_dict(), "id": order.order_id})
+        #save_ticket({**order.to_dict(), "id": order.order_id})
         return order.to_dict()
 
     def get_available_strikes(self, expiry: str) -> List[float]:
