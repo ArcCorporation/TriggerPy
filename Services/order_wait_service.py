@@ -1,7 +1,7 @@
 import threading
 import time
 import logging
-from Helpers.Order import Order
+from Helpers.Order import Order, OrderState
 from Services.watcher_info import (
     ThreadInfo, watcher_info,
     STATUS_PENDING, STATUS_RUNNING, STATUS_FINALIZED, STATUS_CANCELLED, STATUS_FAILED
@@ -111,7 +111,7 @@ class OrderWaitService:
             try:
                 logging.info(f"[StopLoss] Watching {order.symbol} stop-loss @ {stop_loss_price}  ({order.right})")
                 while True:
-                    if order.state not in ("ACTIVE", "PENDING"):
+                    if order.state not in (OrderState.ACTIVE, OrderState.PENDING):
                         logging.info(f"[StopLoss] Order {order.order_id} no longer active, stopping watcher.")
                         tinfo.update_status(STATUS_CANCELLED)
                         return
