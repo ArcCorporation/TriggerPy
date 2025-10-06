@@ -131,6 +131,10 @@ class GeneralApp:
     @property
     def is_connected(self) -> bool:
         return self._connected
+    
+    def watch_price(self, symbol, update_fn):
+        watcher = PriceWatcher(symbol, update_fn, polygon_service)
+        return watcher
 
     # --- Wrappers around services ---
     def search_symbol(self, query: str):
