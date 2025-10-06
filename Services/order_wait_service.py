@@ -1,6 +1,7 @@
 import threading
 import time
 import logging
+import time
 from Helpers.Order import Order, OrderState
 from Services.watcher_info import (
     ThreadInfo, watcher_info,
@@ -108,6 +109,8 @@ class OrderWaitService:
         tinfo.update_status(STATUS_RUNNING)
 
         def _stop_loss_thread():
+            last_print = 0
+            delay = 5
             try:
                 logging.info(f"[StopLoss] Watching {order.symbol} stop-loss @ {stop_loss_price}  ({order.right})")
                 while True:
@@ -120,9 +123,11 @@ class OrderWaitService:
                     if not snap:
                         time.sleep(self.poll_interval)
                         continue
-
+                    now = time.time()
                     last_price = snap.get("last")
-                    logging.info(f"[StopLoss] Poll {order.symbol} → {last_price}, stop={stop_loss_price}")
+                    if now - last_print >= delay:
+                        logging.info(f"[StopLoss] Poll {order.symbol} → {last_price}, stop={stop_loss_price}")
+                        last_print = now
 
                     if last_price:
                         tinfo.update_status(STATUS_RUNNING, last_price=last_price)
@@ -252,6 +257,8 @@ class OrderWaitService:
 
     def _poll_snapshot(self, order_id: str, order: Order):
         """Alternate mode: continuously poll snapshot until trigger/cancel."""
+        last_print = 0
+        delay = 5
         while True:
             with self.lock:
                 if order_id not in self.pending_orders or order_id in self.cancelled_orders:
@@ -261,11 +268,13 @@ class OrderWaitService:
             if not snap:
                 time.sleep(self.poll_interval)
                 continue
-
+            now = time.time()
             last_price = snap.get("last")
             msg = f"[WaitService] Poll {order.symbol} → {last_price}"
-            logging.info(msg)
-            print(msg)
+            if now - last_print >= delay:
+                logging.info(msg)
+                print(msg)
+                last_print = now
 
             if last_price and order.is_triggered(last_price):
                 self._finalize_order(order_id, order)
@@ -278,6 +287,8 @@ class OrderWaitService:
 
     def _finalize_order(self, order_id: str, order: Order):
         """Sends the order to TWS using the new TWSService."""
+        
+
         try:
             success = self.tws.place_custom_order(order)
             if success:
