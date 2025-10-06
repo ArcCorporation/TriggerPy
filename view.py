@@ -3,7 +3,7 @@ from tkinter import ttk
 import logging
 import threading
 from typing import Optional, Callable
-
+import time
 from model import general_app, get_model
 from Services import nasdaq_info
 
@@ -104,16 +104,22 @@ class SymbolSelector(ttk.Frame):
         self.lbl_price.config(text=f"Price: {price}")
 
     def _price_worker(self, symbol: str):
-        try:
-            snap = general_app.get_snapshot(symbol)
-            price_txt = "-"
-            if snap and "last" in snap:
-                current_price = float(snap["last"])
-                price_txt = f"{current_price:.2f}"
-        except Exception as e:
-            logging.error(f"Price fetch error: {e}")
-            price_txt = "-"
-        self.after(0, lambda: self.lbl_price.config(text=f"Price: {price_txt}"))
+        last = 0
+        delay = 2
+        while True:
+            now = time.time()
+            if now - last >= delay:
+                try:
+                    snap = general_app.get_snapshot(symbol)
+                    price_txt = "-"
+                    if snap and "last" in snap:
+                        current_price = float(snap["last"])
+                        price_txt = f"{current_price:.2f}"
+                except Exception as e:
+                    logging.error(f"Price fetch error: {e}")
+                    price_txt = "-"
+                self.after(0, lambda: self.lbl_price.config(text=f"Price: {price_txt}"))
+            last = now
 
 
 # ---------------- Order Frame (threads for all blocking ops) ----------------
