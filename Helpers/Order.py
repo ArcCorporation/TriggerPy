@@ -35,6 +35,43 @@ class Order:
         self.state = OrderState.PENDING if trigger else OrderState.ACTIVE
         self.result = None  # finalize edildiğinde TWS’ten dönen order id seti
 
+
+    def serialize(self) -> str:
+        """
+        Serialize the order object into a single string with attributes separated by underscores.
+        """
+        position_size = self._position_size if self._position_size is not None else "None"
+        return f"{self.order_id}_{self.symbol}_{self.expiry}_{self.strike}_{self.right}_{self.qty}_{self.entry_price}_{self.tp_price}_{self.sl_price}_{self.action}_{self.type}_{self.trigger}_{position_size}"
+
+    @classmethod
+    def deserialize(cls, serialized_str: str) -> 'Order':
+        """
+        Deserialize the string back into an Order object.
+        """
+        parts = serialized_str.split('_')
+        if len(parts) != 13:
+            raise ValueError("Invalid serialized string format")
+
+        order_id, symbol, expiry, strike, right, qty, entry_price, tp_price, sl_price, action, type, trigger, position_size = parts
+
+        # Convert numeric strings back to their appropriate types
+        qty = int(qty)
+        entry_price = float(entry_price)
+        tp_price = float(tp_price)
+        sl_price = float(sl_price) if sl_price != "None" else None
+        trigger = float(trigger) if trigger != "None" else None
+        position_size = float(position_size) if position_size != "None" else None
+
+        # Create a new Order object with the deserialized values
+        order = cls(symbol, expiry, strike, right, qty, entry_price, tp_price, sl_price, action, type, trigger)
+        order.order_id = order_id  # Set the original order_id
+
+        # Set the position size if it was provided
+        if position_size is not None:
+            order.set_position_size(position_size)
+
+        return order
+
     def is_triggered(self, market_price: float) -> bool:
         """
         Trigger koşulu sağlandı mı?
