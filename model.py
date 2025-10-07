@@ -308,45 +308,59 @@ class AppModel:
             return False
         return True
 
-    def place_option_order(self, action: str = "BUY", position: int = 2000,quantity: int = 1,
-                           trigger_price: Optional[float] = None) -> Dict:
+    def place_option_order(self,
+                       action: str = "BUY",
+                       position: int = 2000,
+                       quantity: int = 1,
+                       trigger_price: Optional[float] = None) -> Dict:
+        """
+        Create & transmit an option order.  
+        Fails gracefully if TWS snapshot times out.
+        """
+        # 1. basic sanity
         if not all([self._symbol, self._expiry, self._strike, self._right]):
             raise ValueError("Option parameters not set")
 
         current_price = self.refresh_market_price()
         if not current_price:
-            raise ValueError("Could not get current market price")
+            raise ValueError("Could not get underlying market price")
 
         if not self._validate_breakout_trigger(trigger_price, current_price):
             raise ValueError(f"Trigger {trigger_price} invalid for current price {current_price}")
 
+        # 2. live option premium (snapshot) – can time-out
+        snapshot = general_app.get_option_snapshot(self._symbol,
+                                                self._expiry,
+                                                self._strike,
+                                                self._right)
+        if snapshot is None or snapshot.get("mid") is None:
+            logging.error("place_option_order: TWS snapshot time-out – cannot set TP/SL")
+            raise RuntimeError("No option premium available from TWS snapshot")
 
-        entry_price = general_app.get_option_snapshot(self._symbol,self._expiry,self._strike, self._right)
-        try:
-            entry_price = self.get_option_price(self._expiry, self._strike, self._right)
-        except Exception:
-            pass
+        mid_premium = snapshot["mid"]
 
+        # 3. auto-set TP/SL only if user left them blank
         if self._stop_loss is None:
-            self._stop_loss = round(entry_price * 0.8, 2)
+            self._stop_loss = round(mid_premium * 0.8, 2)
         if self._take_profit is None:
-            self._take_profit = round(entry_price * 1.2, 2)
+            self._take_profit = round(mid_premium * 1.2, 2)
 
+        # 4. build & route order
         order = Order(
             symbol=self._symbol,
             expiry=self._expiry,
             strike=self._strike,
             right=self._right,
             qty=quantity,
-            entry_price=entry_price,
+            entry_price=mid_premium,
             tp_price=self._take_profit,
             sl_price=self._stop_loss,
             action=action.upper(),
             trigger=trigger_price
         )
-
         order.set_position_size(float(position))
 
+        # 5. immediate or waiting execution
         if not trigger_price or order.is_triggered(current_price):
             success = general_app.place_custom_order(order)
             if success:
@@ -360,25 +374,23 @@ class AppModel:
             logging.info(f"AppModel[{self._symbol}]: Order waiting breakout {order.order_id}")
 
         self._order = order
-        #save_ticket({**order.to_dict(), "id": order.order_id})
         return order.to_dict()
+        def get_available_strikes(self, expiry: str) -> List[float]:
+            try:
+                maturities = general_app.tws.get_maturities(self._symbol)
+                return maturities['strikes'] if maturities and expiry in maturities['expirations'] else []
+            except Exception as e:
+                logging.error(f"AppModel[{self._symbol}]: Failed to get strikes: {e}")
+                return []
 
-    def get_available_strikes(self, expiry: str) -> List[float]:
-        try:
-            maturities = general_app.tws.get_maturities(self._symbol)
-            return maturities['strikes'] if maturities and expiry in maturities['expirations'] else []
-        except Exception as e:
-            logging.error(f"AppModel[{self._symbol}]: Failed to get strikes: {e}")
-            return []
-
-    def cancel_pending_order(self, order_id: str) -> bool:
-        order = self._order
-        if order.order_id == order_id and order.state == OrderState.PENDING:
-            general_app.cancel_order(order_id)
-            order.mark_cancelled()
-            logging.info(f"AppModel[{self._symbol}]: Order cancelled {order_id}")
-            return True
-        return False
+        def cancel_pending_order(self, order_id: str) -> bool:
+            order = self._order
+            if order.order_id == order_id and order.state == OrderState.PENDING:
+                general_app.cancel_order(order_id)
+                order.mark_cancelled()
+                logging.info(f"AppModel[{self._symbol}]: Order cancelled {order_id}")
+                return True
+            return False
 
     def get_order(self) -> Optional[Order]:
         return self._order

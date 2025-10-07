@@ -136,4 +136,54 @@ class ArcTriggerApp(tk.Tk):
             self.banner.update_connection_status(True)
             logger.info("Services connected successfully")
         else:
-            self.banner.update_connection
+            self.banner.update_connection_status(False)
+            logger.error("Failed to connect services")
+
+    def disconnect_services(self):
+        general_app.disconnect()
+        self.banner.update_connection_status(False)
+        logger.info("Services disconnected")
+
+    # ------------------------------------------------------------------
+    #  ORDER FRAMES
+    # ------------------------------------------------------------------
+    def build_order_frames(self):
+        """Create order frames based on spinbox value."""
+        for frame in self.order_frames:
+            frame.destroy()
+        self.order_frames.clear()
+        try:
+            count = int(self.spin_count.get())
+        except ValueError:
+            count = 1
+        for i in range(count):
+            frame = OrderFrame(self.order_container, order_id=i + 1)
+            frame.pack(fill="x", pady=10, padx=10)
+            self.order_frames.append(frame)
+
+    # ------------------------------------------------------------------
+    #  DEBUG CONSOLE
+    # ------------------------------------------------------------------
+    def toggle_debug(self):
+        if self.debug_frame and self.debug_frame.winfo_exists():
+            self.debug_frame.destroy()
+            self.debug_frame = None
+            self.btn_debug.config(text="Show Debug")
+            for h in logger.handlers[:]:
+                if isinstance(h, TkinterHandler):
+                    logger.removeHandler(h)
+        else:
+            self.debug_frame = DebugFrame(self)
+            self.debug_frame.pack(fill="both", expand=True, padx=10, pady=10)
+            self.debug_frame.add_text("[INFO] Debug console started")
+            handler = TkinterHandler(self.debug_frame)
+            handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+            logger.addHandler(handler)
+            logger.setLevel(logging.INFO)
+            self.btn_debug.config(text="Hide Debug")
+
+
+# ---------- ENTRY ----------
+if __name__ == "__main__":
+    app = ArcTriggerApp()
+    app.mainloop()
