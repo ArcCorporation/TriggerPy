@@ -2,6 +2,7 @@ import logging
 from order_wait_service import OrderWaitService
 from tws_service import TWSService
 from Helpers.Order import Order
+from typing import Optional
 
 class OrderManager:
     def __init__(self, tws_service):
@@ -14,6 +15,62 @@ class OrderManager:
         """
         self.finalized_orders[order_id] = order
         logging.info(f"Added finalized order {order_id} to management.")
+        
+
+    def issue_sell_order(self,
+                     base_order_id: str,
+                     sell_qty: int,
+                     limit_price: Optional[float] = None) -> Optional[str]:
+        """
+        Create and transmit a **sell** order for an already-finalised long position.
+
+        Parameters
+        ----------
+        base_order_id : str
+            The key under which the original BUY order is stored in `self.finalized_orders`.
+        sell_qty : int
+            Number of option contracts to sell (must be ≤ original buy qty).
+        limit_price : float | None
+            Limit price per contract.  
+            If **None** → sent as a **market** order (IB will treat it as LMT with no limit).
+
+        Returns
+        -------
+        str | None
+            The new **sell** order ID if TWS accepted the order, otherwise **None**.
+        """
+        base = self.finalized_orders.get(base_order_id)
+        if not base or base.action != "BUY":
+            logging.warning("[OrderManager] issue_sell_order: no buy-order %s", base_order_id)
+            return None
+
+        if sell_qty <= 0 or sell_qty > base.qty:
+            logging.warning("[OrderManager] issue_sell_order: invalid sell qty %s for order %s",
+                            sell_qty, base_order_id)
+            return None
+
+        sell_order = Order(
+            symbol=base.symbol,
+            expiry=base.expiry,
+            strike=base.strike,
+            right=base.right,
+            qty=sell_qty,
+            action="SELL",
+            entry_price=0,          # not used for sell
+            limit_price=limit_price
+        )
+        sell_order.set_position_size(base._position_size)
+
+        ok = self.tws_service.place_custom_order(sell_order)
+        if ok:
+            logging.info("[OrderManager] sell order placed -> ID %s", sell_order.order_id)
+            return sell_order.order_id
+
+        logging.error("[OrderManager] sell order failed for %s", base_order_id)
+        return None
+
+
+
 
     def remove_order(self, order_id):
         """
