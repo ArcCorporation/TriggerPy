@@ -337,7 +337,7 @@ class AppModel:
             logging.error("place_option_order: TWS snapshot time-out – cannot set TP/SL")
             raise RuntimeError("No option premium available from TWS snapshot")
 
-        mid_premium = snapshot["mid"]
+        mid_premium = snapshot["mid"] * 1.02
 
         # 3. auto-set TP/SL only if user left them blank
         if self._stop_loss is None:
