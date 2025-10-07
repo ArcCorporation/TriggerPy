@@ -337,7 +337,15 @@ class AppModel:
             logging.error("place_option_order: TWS snapshot time-out – cannot set TP/SL")
             raise RuntimeError("No option premium available from TWS snapshot")
 
-        mid_premium = snapshot["mid"] * 1.02
+        spread = snapshot["ask"] - snapshot["bid"]
+        if spread > snapshot["mid"] * 0.05:   # if spread wider than 5%
+            bias = 0.01   # 1%
+        else:
+            bias = 0.02   # 2%
+
+        mid_premium = snapshot["mid"] * (1 + bias)
+
+        #mid_premium = snapshot["mid"] * 1.02
 
         # 3. auto-set TP/SL only if user left them blank
         if self._stop_loss is None:
