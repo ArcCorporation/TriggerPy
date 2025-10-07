@@ -40,7 +40,9 @@ class Banner(tk.Canvas):
             self.after(30000, self.update_market_info)
 
 
-# ---------------- Symbol Selector (threaded search) ----------------
+# ------------------------------------------------------------------
+#  SymbolSelector  –  NASDAQ / NYSE only  +  Shift-↑/Tab auto-pick
+# ------------------------------------------------------------------
 class SymbolSelector(ttk.Frame):
     """Combobox that searches symbols on a worker thread to avoid UI lag."""
     def __init__(self, parent, on_symbol_selected: Callable[[str], None], **kwargs):
@@ -50,17 +52,53 @@ class SymbolSelector(ttk.Frame):
         ttk.Label(self, text="Stock").pack(side="left")
         self.combo_symbol = ttk.Combobox(self, width=20)
         self.combo_symbol.pack(side="left", padx=5)
+
+        # NEW: accelerate keys
         self.combo_symbol.bind("<KeyRelease>", self._on_typed)
         self.combo_symbol.bind("<<ComboboxSelected>>", self._on_selected)
+        self.combo_symbol.bind("<Shift-Up>", self._auto_select_first)
+        self.combo_symbol.bind("<Tab>", self._auto_select_first)
 
         self.lbl_price = ttk.Label(self, text="Price: -")
         self.lbl_price.pack(side="left", padx=10)
         self.watcher = None
-        # threading state
+
         self._search_req_id = 0
         self._search_lock = threading.Lock()
 
-    # ---- typed search (debounced by latest-wins id) ----
+    # ----------------------------------------------------------
+    #  1.  Filtered search worker  (NASDAQ / NYSE only)
+    # ----------------------------------------------------------
+    def _search_worker(self, query: str, req_id: int):
+        try:
+            raw = general_app.search_symbol(query) or []
+            filtered = [
+                r for r in raw
+                if (r.get("primaryExchange") or "").upper() in {"NASDAQ", "NYSE"}
+            ]
+            values = [f"{r['symbol']} - {r['primaryExchange']}" for r in filtered]
+        except Exception as e:
+            logging.error(f"Symbol search error: {e}")
+            values = []
+
+        def apply():
+            if req_id == self._search_req_id:
+                self.combo_symbol["values"] = values
+        self.after(0, apply)
+
+    # ----------------------------------------------------------
+    #  2.  Auto-select first hit on Shift-↑ or Tab
+    # ----------------------------------------------------------
+    def _auto_select_first(self, event=None):
+        vals = self.combo_symbol["values"]
+        if vals:
+            self.combo_symbol.set(vals[0])
+            self._on_selected()
+        return "break"
+
+    # ----------------------------------------------------------
+    #  3.  Original typed search (unchanged logic)
+    # ----------------------------------------------------------
     def _on_typed(self, event=None):
         query = self.combo_symbol.get().upper()
         if len(query) < 2:
@@ -71,35 +109,20 @@ class SymbolSelector(ttk.Frame):
             req_id = self._search_req_id
         threading.Thread(target=self._search_worker, args=(query, req_id), daemon=True).start()
 
-    def _search_worker(self, query: str, req_id: int):
-        try:
-            results = general_app.search_symbol(query)
-            if not results:
-                values = []
-            else:
-                values = [f"{r['symbol']} - {r.get('primaryExchange', '-')}" for r in results]
-        except Exception as e:
-            logging.error(f"Symbol search error: {e}")
-            values = []
-        # only apply if this is the latest request
-        def apply():
-            if req_id == self._search_req_id:
-                self.combo_symbol["values"] = values
-        self.after(0, apply)
-
-    # ---- selection event ----
+    # ----------------------------------------------------------
+    #  4.  Selection handler (unchanged)
+    # ----------------------------------------------------------
     def _on_selected(self, event=None):
         selection = self.combo_symbol.get()
         if not selection:
             return
         symbol = selection.split(" - ")[0]
         logging.info(f"Symbol selected: {symbol}")
-        
-        self.watcher = general_app.watch_price(symbol,self._update_price)
-        # fetch price in background to avoid blocking UI
+
+        self.watcher = general_app.watch_price(symbol, self._update_price)
         threading.Thread(target=self._price_worker, args=(symbol,), daemon=True).start()
         self.on_symbol_selected_cb(symbol)
-    
+
     def _update_price(self, price):
         self.lbl_price.config(text=f"Price: {price}")
 
@@ -146,10 +169,9 @@ class OrderFrame(tk.Frame):
         ttk.Radiobutton(self, text="Call", variable=self.var_type, value="CALL").grid(row=1, column=2)
         ttk.Radiobutton(self, text="Put", variable=self.var_type, value="PUT").grid(row=1, column=3)
 
-        ttk.Label(self, text="OrderType").grid(row=1, column=4)
-        self.combo_ordertype = ttk.Combobox(self, values=["MKT", "LMT"], width=6, state="readonly")
-        self.combo_ordertype.grid(row=1, column=5, padx=5)
-        self.combo_ordertype.current(0)
+        # --- Order Type (fixed LMT) ---
+        ttk.Label(self, text="Type").grid(row=1, column=4)
+        ttk.Label(self, text="LMT", foreground="gray").grid(row=1, column=5)
 
         # --- Position Size ---
         ttk.Label(self, text="Position Size").grid(row=2, column=0)
@@ -198,8 +220,6 @@ class OrderFrame(tk.Frame):
         self.entry_tp = ttk.Entry(self, width=8)
         self.entry_tp.grid(row=3, column=9, padx=5)
 
-        
-
         # --- Controls ---
         frame_ctrl = ttk.Frame(self)
         frame_ctrl.grid(row=4, column=0, columnspan=9, pady=8)
@@ -211,13 +231,12 @@ class OrderFrame(tk.Frame):
         # --- Status ---
         self.lbl_status = ttk.Label(self, text="Select symbol to start", foreground="gray")
         self.lbl_status.grid(row=5, column=0, columnspan=9, pady=5)
-    # ---------- helpers ----------
 
+    # ---------- helpers ----------
     def _set_stop_loss(self, value: float):
         """Set Stop Loss entry directly to offset value (no math here)."""
         self.entry_sl.delete(0, tk.END)
         self.entry_sl.insert(0, str(value))
-
 
     def _set_pos_and_recalc(self, value: float):
         """Set position size from quick button and recalc quantity."""
@@ -237,6 +256,7 @@ class OrderFrame(tk.Frame):
             self.entry_qty.insert(0, str(qty))
         except Exception as e:
             logging.error(f"Quantity recalc error: {e}")
+
     def _ui(self, fn, *args, **kwargs):
         """Thread-safe UI update."""
         self.after(0, lambda: fn(*args, **kwargs))
