@@ -313,6 +313,68 @@ class TWSService(EWrapper, EClient):
             logging.error(f"TWSService: Failed to build option chain for {symbol}: {e}")
             return []
 
+    def get_option_snapshot(self,
+                symbol: str,
+                expiry: str,
+                strike: float,
+                right: str,
+                timeout: int = 3) -> Optional[dict]:
+        """
+        Snapshot market data for a specific option contract.
+        Returns a dict with bid, ask, last, mid; or None if no data.
+        Non-blocking for TWS main thread.
+        """
+        if not self.is_connected():
+            logging.error("TWSService.get_option_snapshot(): not connected")
+            return None
+
+        # Build the option contract
+        contract = self.create_option_contract(symbol, expiry, strike, right)
+        conid = self.resolve_conid(contract)
+        if not conid:
+            logging.error(f"TWSService: Failed to resolve conId for {symbol} {expiry} {strike}{right}")
+            return None
+        contract.conId = conid
+
+        req_id = self._get_next_req_id()
+        result = {"bid": None, "ask": None, "last": None, "mid": None}
+        event = threading.Event()
+
+        # Temporary callback
+        def tickPrice(reqId, tickType, price, attrib):
+            if reqId != req_id:
+                return
+            if tickType == 1:  # bid
+                result["bid"] = price
+            elif tickType == 2:  # ask
+                result["ask"] = price
+            elif tickType == 4:  # last
+                result["last"] = price
+            if result["bid"] or result["ask"] or result["last"]:
+                result["mid"] = None
+                if result["bid"] and result["ask"]:
+                    result["mid"] = (result["bid"] + result["ask"]) / 2
+                event.set()
+
+        # Hook callback temporarily
+        original_tick = self.tickPrice
+        self.tickPrice = tickPrice
+
+        try:
+            self.reqMktData(req_id, contract, "", True, False, [])
+            if event.wait(timeout):
+                logging.info(f"[TWSService] Snapshot for {symbol} {expiry} {strike}{right}: {result}")
+                return result
+            else:
+                logging.warning(f"[TWSService] Snapshot timeout for {symbol} {expiry} {strike}{right}")
+                return None
+        finally:
+            try:
+                self.cancelMktData(req_id)
+            except Exception:
+                pass
+            self.tickPrice = original_tick
+
 
     def place_custom_order(self, custom_order, account: str = "") -> bool:
         """

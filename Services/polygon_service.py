@@ -27,6 +27,33 @@ class PolygonService:
         self._start_ws()
 
     # ---------------- REST METHODS ----------------
+    def get_option_snapshot(self, underlying: str, expiry: str, strike: float, right: str):
+        """
+        Fetch option snapshot from Polygon for a given contract.
+        Returns {'bid', 'ask', 'last', 'mid'} or None.
+        """
+        # Build OCC symbol, e.g. TSLA251010C00450000
+        y, m, d = expiry[:4], expiry[4:6], expiry[6:8]
+        strike_str = f"{int(strike*1000):08d}"
+        occ = f"{underlying.upper()}{y[2:]}{m}{d}{right.upper()}{strike_str}"
+
+        url = f"{self.base_url}/v3/snapshot/options/{underlying.upper()}/{occ}"
+        params = {"apiKey": self.api_key}
+
+        try:
+            resp = requests.get(url, params=params, timeout=5)
+            resp.raise_for_status()
+            data = resp.json().get("results", {})
+            quote = data.get("last_quote", {})
+            trade = data.get("last_trade", {})
+            bid, ask, last = quote.get("bid"), quote.get("ask"), trade.get("price")
+            mid = None
+            if bid and ask:
+                mid = (bid + ask) / 2
+            return {"bid": bid, "ask": ask, "last": last, "mid": mid}
+        except Exception as e:
+            logging.error(f"[Polygon] get_option_snapshot failed: {e}")
+            return None
     def get_last_trade(self, symbol: str):
         url = f"{self.base_url}/v2/last/trade/{symbol.upper()}"
         params = {"apiKey": self.api_key}

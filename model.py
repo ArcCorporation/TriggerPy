@@ -89,9 +89,15 @@ class GeneralApp:
             return False
         return self._tws.place_custom_order(order)
 
-    def watch_price(self, symbol, update_fn):
-        watcher = PriceWatcher(symbol, update_fn, polygon_service)
-        return watcher
+    def get_option_snapshot(self, symbol: str, expiry: str, strike: float, right: str):
+        """
+        Wrapper around TWSService.get_option_snapshot.
+        Returns {'bid', 'ask', 'last', 'mid'} or None.
+        Used by AppModel and risk modules to get live option pricing.
+        """
+        if not self._tws:
+            raise RuntimeError("GeneralApp: TWS not connected")
+        return self._tws.get_option_snapshot(symbol, expiry, strike, right)
 
     def connect(self) -> bool:
         """Connect global services once for all models."""
@@ -125,6 +131,10 @@ class GeneralApp:
     @property
     def is_connected(self) -> bool:
         return self._connected
+    
+    def watch_price(self, symbol, update_fn):
+        watcher = PriceWatcher(symbol, update_fn, polygon_service)
+        return watcher
 
     # --- Wrappers around services ---
     def search_symbol(self, query: str):
@@ -274,6 +284,9 @@ class AppModel:
         except Exception as e:
             logging.error(f"AppModel[{self._symbol}]: Failed to get option chain: {e}")
             return []
+    
+    
+
 
     def get_option_price(self, expiry: str, strike: float, right: str):
         chain = self.get_option_chain(expiry)
@@ -307,7 +320,8 @@ class AppModel:
         if not self._validate_breakout_trigger(trigger_price, current_price):
             raise ValueError(f"Trigger {trigger_price} invalid for current price {current_price}")
 
-        entry_price = 0.10
+
+        entry_price = general_app.get_option_snapshot(self._symbol,self._expiry,self._strike, self._right)
         try:
             entry_price = self.get_option_price(self._expiry, self._strike, self._right)
         except Exception:
