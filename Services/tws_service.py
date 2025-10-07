@@ -23,6 +23,7 @@ class TWSService(EWrapper, EClient):
         self.next_valid_order_id = None
         self.connection_ready = threading.Event()
         self.client_id = random.randint(1, 999999)
+        self.connected = False
         
         # For data requests
         self._maturities_data = {}
@@ -153,10 +154,12 @@ class TWSService(EWrapper, EClient):
 
     def connect_and_start(self, host='127.0.0.1', port=7497, timeout=10):
         """Connect to TWS/IB Gateway"""
+        if self.connected:
+            return True
         try:
             logging.info(f"Connecting to TWS on {host}:{port} with Client ID: {self.client_id}")
             self.connect(host, port, self.client_id)
-            
+            self.connected = True
             api_thread = threading.Thread(
                 target=self.run, 
                 daemon=True, 
@@ -516,11 +519,12 @@ class TWSService(EWrapper, EClient):
         self.tickPrice = original_tick
         return None
 
+service = TWSService()
 
-def create_tws_service(host: str = '127.0.0.1', port: int = 7497, client_id: Optional[int] = None) -> TWSService:
-    service = TWSService()
-    if client_id is not None:
-        service.client_id = client_id
+
+def create_tws_service() -> TWSService:
+    
+    
     return service
 
 

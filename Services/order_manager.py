@@ -1,11 +1,12 @@
 import logging
 from order_wait_service import OrderWaitService
-from tws_service import TWSService
+from Services.tws_service import create_tws_service, TWSService
 from Helpers.Order import Order
 from typing import Optional
 
+
 class OrderManager:
-    def __init__(self, tws_service):
+    def __init__(self, tws_service: TWSService):
         self.tws_service = tws_service
         self.finalized_orders = {}  # Dictionary to hold finalized orders
 
@@ -89,23 +90,36 @@ class OrderManager:
                 setattr(self.finalized_orders[order_id], key, value)
             logging.info(f"Updated order {order_id} with new attributes.")
 
-    def take_profit(self, order_id, percentage):
+    def take_profit(self, order_id: str, percentage: float) -> Optional[str]:
         """
-        Automatically sell a portion of the options for the order at a profit.
+        Sell a percentage (0–1) of the contracts at trigger × (1 + percentage).
         """
-        order = self.finalized_orders.get(order_id)
-        if order:
-            # Logic to calculate sell quantity and place the sell order
-            pass  # Placeholder for actual implementation
+        base = self.finalized_orders.get(order_id)
+        if not base or base.action != "BUY":
+            logging.warning("[OrderManager] take_profit: no buy-order %s", order_id)
+            return None
 
-    def breakeven(self, order_id):
+        # percentage is given as 0.20, 0.30, 0.40
+        sell_qty = max(1, int(base.qty * percentage))
+        profit_price = round(base.trigger * (1 + percentage), 2)
+
+        return self.issue_sell_order(order_id, sell_qty, limit_price=profit_price)
+
+    def breakeven(self, order_id: str) -> Optional[str]:
         """
-        Automatically sell the entire position to breakeven.
+        Sell 100 % of the contracts at the original trigger price (breakeven).
         """
-        order = self.finalized_orders.get(order_id)
-        if order:
-            # Logic to calculate breakeven price and place the sell order
-            pass  # Placeholder for actual implementation
+        base = self.finalized_orders.get(order_id)
+        if not base or base.action != "BUY":
+            logging.warning("[OrderManager] breakeven: no buy-order %s", order_id)
+            return None
+
+        # use the exact qty that was finally bought
+        sell_qty = base.qty
+        # breakeven = trigger price of the original buy
+        breakeven_price = base.trigger
+
+        return self.issue_sell_order(order_id, sell_qty, limit_price=breakeven_price)
 
     def get_order_status(self, order_id):
         """
@@ -123,3 +137,8 @@ class OrderManager:
             pass  # Placeholder for actual implementation
 
     # Additional methods to interact with finalized orders can be added here
+
+
+    # ---------- export singleton ----------
+
+order_manager = OrderManager(create_tws_service())
