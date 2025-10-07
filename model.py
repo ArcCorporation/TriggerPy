@@ -345,6 +345,15 @@ class AppModel:
 
         mid_premium = snapshot["mid"] * (1 + bias)
 
+        # normalize to valid tick size
+        if mid_premium < 3:
+            # Options under $3 trade in $0.01 increments
+            mid_premium = round(round(mid_premium / 0.01) * 0.01, 2)
+        else:
+            # Options $3 or higher trade in $0.05 increments
+            mid_premium = round(round(mid_premium / 0.05) * 0.05, 2)
+
+
         #mid_premium = snapshot["mid"] * 1.02
 
         # 3. auto-set TP/SL only if user left them blank
