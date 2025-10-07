@@ -295,17 +295,21 @@ class OrderFrame(tk.Frame):
 
         def worker():
             try:
-                maturities = self.model.get_available_maturities()
+                all_maturities = self.model.get_available_maturities()   # raw strings YYYYMMDD
+                # keep only the first 4 chronologically
+                kept = sorted(all_maturities)[:4]
             except Exception as e:
                 logging.error(f"Maturity load error: {e}")
-                maturities = []
+                kept = []
+
             def apply():
                 if token != self._symbol_token or req_id != self._maturity_req_id:
                     return  # stale
-                self.combo_maturity["values"] = maturities
-                if maturities:
-                    self.combo_maturity.set(maturities[0])
+                self.combo_maturity["values"] = kept
+                if kept:
+                    self.combo_maturity.set(kept[0])
             self._ui(apply)
+
         threading.Thread(target=worker, daemon=True).start()
 
     def load_strikes_async(self, maturity: str):
