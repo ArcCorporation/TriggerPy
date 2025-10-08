@@ -143,6 +143,14 @@ class OrderWaitService:
                     else:
                         triggered = last_price <= stop_loss_price   # CALL: fall = loss
                     # --------------------------------
+                    premium = self.tws.get_option_premium(
+                        order.symbol, order.expiry, order.strike, order.right
+                    )
+                    if premium is None or premium <= 0:          # safety: can't price the option
+                        logging.error("[StopLoss] No live premium – aborting exit")
+                        tinfo.update_status(STATUS_FAILED, info={"error": "No premium"})
+                        raise ValueError(f"[StopLoss] No live premium – aborting exit")
+
 
                     if triggered:
                         try:
