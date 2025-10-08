@@ -48,6 +48,8 @@ class OrderWaitService:
         elif mode == "poll":
             # Old-school polling thread path
             def _poll_snapshot(order_id: str, order: Order, tinfo: ThreadInfo):
+                delay = 2
+                last = 0
                 try:
                     while True:
                         with self.lock:
@@ -60,8 +62,11 @@ class OrderWaitService:
 
                         last_price = snap.get("last")
                         msg = f"[WaitService] Poll {order.symbol} → {last_price}"
-                        logging.info(msg)
-                        print(msg)
+                        now = time.time()
+                        if now - last > delay:
+                            logging.info(msg)
+                            print(msg)
+                            last = now
 
                         if last_price:
                             tinfo.update_status(STATUS_RUNNING, last_price=last_price)

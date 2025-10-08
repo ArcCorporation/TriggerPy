@@ -316,22 +316,11 @@ class TWSService(EWrapper, EClient):
             logging.error(f"TWSService: Failed to build option chain for {symbol}: {e}")
             return []
 
-    def get_option_snapshot(self,
-                symbol: str,
-                expiry: str,
-                strike: float,
-                right: str,
-                timeout: int = 3) -> Optional[dict]:
-        """
-        Snapshot market data for a specific option contract.
-        Returns a dict with bid, ask, last, mid; or None if no data.
-        Non-blocking for TWS main thread.
-        """
+    def get_option_snapshot(self, symbol: str, expiry: str, strike: float, right: str, timeout: int = 3):
         if not self.is_connected():
             logging.error("TWSService.get_option_snapshot(): not connected")
             return None
 
-        # Build the option contract
         contract = self.create_option_contract(symbol, expiry, strike, right)
         conid = self.resolve_conid(contract)
         if not conid:
@@ -343,41 +332,35 @@ class TWSService(EWrapper, EClient):
         result = {"bid": None, "ask": None, "last": None, "mid": None}
         event = threading.Event()
 
-        # Temporary callback
         def tickPrice(reqId, tickType, price, attrib):
-            if reqId != req_id:
+            if reqId != req_id or price <= 0:
                 return
-            if tickType == 1:  # bid
+            if tickType == 1:
                 result["bid"] = price
-            elif tickType == 2:  # ask
+            elif tickType == 2:
                 result["ask"] = price
-            elif tickType == 4:  # last
+            elif tickType == 4:
                 result["last"] = price
-            if result["bid"] or result["ask"] or result["last"]:
-                result["mid"] = None
-                if result["bid"] and result["ask"]:
-                    result["mid"] = (result["bid"] + result["ask"]) / 2
+            if result["bid"] and result["ask"]:
+                result["mid"] = (result["bid"] + result["ask"]) / 2
                 event.set()
 
-        # Hook callback temporarily
         original_tick = self.tickPrice
         self.tickPrice = tickPrice
 
         try:
             self.reqMktData(req_id, contract, "", True, False, [])
-            if event.wait(timeout):
-                logging.info(f"[TWSService] Snapshot for {symbol} {expiry} {strike}{right}: {result}")
-                return result
-            else:
-                logging.warning(f"[TWSService] Snapshot timeout for {symbol} {expiry} {strike}{right}")
-                return None
+            event.wait(timeout)
+            bid, ask = result["bid"], result["ask"]
+            result["mid"] = (bid + ask) / 2 if bid and ask else bid or ask
+            logging.info(f"[TWSService] Snapshot for {symbol} {expiry} {strike}{right}: {result}")
+            return result
         finally:
             try:
                 self.cancelMktData(req_id)
             except Exception:
                 pass
             self.tickPrice = original_tick
-
 
     def place_custom_order(self, custom_order, account: str = "") -> bool:
         """
@@ -478,12 +461,11 @@ class TWSService(EWrapper, EClient):
                     timeout: int = 3) -> Optional[float]:
         """
         Live premium for a *single* option contract.
-        Returns ask first, then bid, then mid; None if unavailable.
+        Waits until bid/ask arrive instead of cancelling early.
         """
         if not self.is_connected():
             return None
 
-        # build option contract
         contract = self.create_option_contract(symbol, expiry, strike, right)
         conid = self.resolve_conid(contract)
         if not conid:
@@ -491,35 +473,36 @@ class TWSService(EWrapper, EClient):
         contract.conId = conid
 
         req_id = self._get_next_req_id()
-        self._contract_details[req_id] = None
-        self._contract_details_event.clear()
-
-        # request market data snapshot (frozen tick)
-        tick_snapshot = {}
-        self.reqMktData(req_id, contract, "", True, False, [])   # snapshot = True
+        tick_snapshot = {"bid": None, "ask": None}
+        event = threading.Event()
 
         def tickPrice(reqId, tickType, price, attrib):
-            if reqId == req_id and price > 0:
-                tick_snapshot[tickType] = price
-                # 1 = bid, 2 = ask, 4 = last, 9 = close
-                if tickType in (1, 2):
-                    self.cancelMktData(req_id)   # got what we need
-                    self._contract_details_event.set()
+            if reqId != req_id or price <= 0:
+                return
+            if tickType == 1:
+                tick_snapshot["bid"] = price
+            elif tickType == 2:
+                tick_snapshot["ask"] = price
+            if tick_snapshot["bid"] is not None and tick_snapshot["ask"] is not None:
+                event.set()
 
-        # hook local callback for this request only
         original_tick = self.tickPrice
         self.tickPrice = tickPrice
 
-        if self._contract_details_event.wait(timeout):
-            self.tickPrice = original_tick   # restore
-            ask = tick_snapshot.get(2)       # 2 = ask
-            bid = tick_snapshot.get(1)       # 1 = bid
-            mid = (bid + ask) / 2 if (bid and ask) else None
-            return ask or bid or mid or None
-
-        # timeout
-        self.tickPrice = original_tick
-        return None
+        try:
+            self.reqMktData(req_id, contract, "", True, False, [])
+            event.wait(timeout)
+            bid = tick_snapshot["bid"]
+            ask = tick_snapshot["ask"]
+            mid = (bid + ask) / 2 if (bid and ask) else bid or ask
+            logging.info(f"[TWSService] Premium snapshot for {symbol} {expiry} {strike}{right}: bid={bid}, ask={ask}, mid={mid}")
+            return mid
+        finally:
+            try:
+                self.cancelMktData(req_id)
+            except Exception:
+                pass
+            self.tickPrice = original_tick
 
 service = TWSService()
 

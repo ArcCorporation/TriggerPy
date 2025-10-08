@@ -13,22 +13,21 @@ from view import Banner, OrderFrame
 from Services.watcher_info import watcher_info
 
 def setup_logging():
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
-    
-    filename = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
-    log_file = log_dir / filename
+    log_dir = Path("logs"); log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log")
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler()
-        ]
-    )
+    root = logging.getLogger()          # grab root explicitly
+    if root.hasHandlers():              # someone else touched it first
+        root.handlers.clear()           # burn it down
 
-    logging.info(f"Logging initialized → {log_file}")
+    handler_file = logging.FileHandler(log_file, encoding='utf-8')
+    handler_console = logging.StreamHandler()
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    for h in (handler_file, handler_console):
+        h.setFormatter(fmt)
+        root.addHandler(h)
+    root.setLevel(logging.INFO)
+    logging.info("Logging initialised → %s", log_file)
 
 class ArcTriggerApp(tk.Tk):
     def __init__(self):
