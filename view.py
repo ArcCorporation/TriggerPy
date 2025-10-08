@@ -163,6 +163,10 @@ class OrderFrame(tk.Frame):
         ttk.Label(self, text="Trigger").grid(row=1, column=0)
         self.entry_trigger = ttk.Entry(self, width=8)
         self.entry_trigger.grid(row=1, column=1, padx=5)
+        self.bind('<Up>',   lambda e: self._bump_trigger(+0.50))
+        self.bind('<Down>', lambda e: self._bump_trigger(-0.50))
+        self.bind('<Control-Up>',   lambda e: self._bump_trigger(+0.10))
+        self.bind('<Control-Down>', lambda e: self._bump_trigger(-0.10))
 
         # --- Type + Order type ---
         self.var_type = tk.StringVar(value="CALL")
@@ -233,6 +237,22 @@ class OrderFrame(tk.Frame):
         self.lbl_status.grid(row=5, column=0, columnspan=9, pady=5)
 
     # ---------- helpers ----------
+    # ---------- helper ----------
+    def _bump_trigger(self, delta: float):
+        try:
+            current = float(self.entry_trigger.get() or 0)
+        except ValueError:
+            current = 0.0
+
+        new = current + delta
+
+        # snap to nearest 0.50 only for big ($0.50) steps
+        if abs(delta) >= 0.5:
+            new = round(new * 2) / 2
+
+        self.entry_trigger.delete(0, tk.END)
+        self.entry_trigger.insert(0, f"{new:.2f}")
+        return "break"
     def _set_stop_loss(self, value: float):
         """Set Stop Loss entry directly to offset value (no math here)."""
         self.entry_sl.delete(0, tk.END)
