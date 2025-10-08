@@ -290,8 +290,16 @@ class OrderWaitService:
         
 
         try:
+            start_ts = time.time() * 1000
+            logging.info(f"[TWS-LATENCY] {order.symbol} Trigger hit → sending order "
+                        f"({order.right}{order.strike}) at {start_ts:.0f} ms")
             success = self.tws.place_custom_order(order)
             if success:
+                end_ts = time.time() * 1000
+                latency = end_ts - start_ts
+                logging.info(f"[TWS-LATENCY] {order.symbol} Order sent in {latency:.1f} ms "
+                            f"(start {start_ts:.0f} → end {end_ts:.0f})")
+
                 order.mark_active(result=f"IB Order ID: {order._ib_order_id}")
                 msg = f"[WaitService] Order finalized {order_id} → IB ID: {order._ib_order_id}"
                 logging.info(msg)

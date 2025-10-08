@@ -2,13 +2,33 @@ import tkinter as tk
 from tkinter import ttk
 import logging
 
-from Helpers.printer import logger
+
+import logging
+from datetime import datetime
+from pathlib import Path
 from Helpers.debugger import DebugFrame, TkinterHandler
 from Services.order_manager import order_manager
 from model import general_app
 from view import Banner, OrderFrame
 from Services.watcher_info import watcher_info
 
+def setup_logging():
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    
+    filename = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
+    log_file = log_dir / filename
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler()
+        ]
+    )
+
+    logging.info(f"Logging initialized → {log_file}")
 
 class ArcTriggerApp(tk.Tk):
     def __init__(self):
@@ -128,15 +148,15 @@ class ArcTriggerApp(tk.Tk):
     def connect_services(self):
         if general_app.connect():
             self.banner.update_connection_status(True)
-            logger.info("Services connected successfully")
+            logging.info("Services connected successfully")
         else:
             self.banner.update_connection_status(False)
-            logger.error("Failed to connect services")
+            logging.error("Failed to connect services")
 
     def disconnect_services(self):
         general_app.disconnect()
         self.banner.update_connection_status(False)
-        logger.info("Services disconnected")
+        logging.info("Services disconnected")
 
     # ------------------------------------------------------------------
     #  ORDER FRAMES
@@ -162,19 +182,20 @@ class ArcTriggerApp(tk.Tk):
         if self.debug_frame and self.debug_frame.winfo_exists():
             self.debug_frame.destroy()
             self.debug_frame = None
-            for h in logger.handlers[:]:
+            for h in logging.handlers[:]:
                 if isinstance(h, TkinterHandler):
-                    logger.removeHandler(h)
+                    logging.removeHandler(h)
         else:
             self.debug_frame = DebugFrame(self)
             self.debug_frame.pack(fill="both", expand=True, padx=10, pady=10)
             handler = TkinterHandler(self.debug_frame)
             handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-            logger.addHandler(handler)
-            logger.setLevel(logging.INFO)
+            logging.addHandler(handler)
+            logging.setLevel(logging.INFO)
 
 
 # ---------- ENTRY ----------
 if __name__ == "__main__":
+    setup_logging()
     app = ArcTriggerApp()
     app.mainloop()

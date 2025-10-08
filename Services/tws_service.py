@@ -432,7 +432,9 @@ class TWSService(EWrapper, EClient):
             custom_order._ib_order_id = order_id
             
             self.placeOrder(order_id, contract, ib_order)
-            
+            custom_order._placed_ts = time.time() * 1000
+            logging.info(f"[TWSService] Sent order {custom_order.symbol} "
+                        f"IBID={order_id} at {custom_order._placed_ts:.0f} ms")
             logging.info(f"Placed custom order: {custom_order.order_id} -> IB ID: {order_id}")
             
             # Increment order ID for next use
