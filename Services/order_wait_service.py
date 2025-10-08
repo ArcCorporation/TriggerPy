@@ -320,7 +320,7 @@ class OrderWaitService:
 
                 # ✅ if stop-loss configured, launch stop-loss watcher
                 if order.trigger and order.sl_price:
-                    stop_loss_level = order.trigger - order.sl_price
+                    stop_loss_level = order.trigger - order.sl_price if order.right == 'C' or order.right == "CALL" else order.trigger + order.sl_price
                     exit_order = Order(
                         symbol=order.symbol,
                         expiry=order.expiry,
