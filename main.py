@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk
 import logging
 
-
+import time
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -65,6 +65,37 @@ class ArcTriggerApp(tk.Tk):
         self.debug_frame = None
         self.disconnect_services()
         self.connect_services()
+        self.start_conn_monitor()
+
+        # ------------------------------------------------------------------
+    #  CONNECTION MONITOR THREAD
+    # ------------------------------------------------------------------
+    def start_conn_monitor(self, interval: int = 5):
+        """
+        Launch a background thread that periodically checks the TWS connection
+        and updates the banner if status changes.
+        """
+        import threading
+        from Services.tws_service import create_tws_service
+
+        def monitor():
+            service = create_tws_service()
+            last_state = None
+            while True:
+                try:
+                    current_state = service.conn_status()
+                    if current_state != last_state:
+                        self.after(0, lambda s=current_state: self.banner.update_connection_status(s))
+                        last_state = current_state
+                except Exception as e:
+                    logging.error(f"[ConnMonitor] Error checking TWS status: {e}")
+                finally:
+                    time.sleep(interval)
+
+        t = threading.Thread(target=monitor, name="ConnMonitorThread", daemon=True)
+        t.start()
+        logging.info("Connection monitor thread started.")
+
 
     # ------------------------------------------------------------------
     #  WATCHERS WINDOW
