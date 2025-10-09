@@ -341,14 +341,14 @@ class AppModel:
 
         mid_premium = snapshot["ask"] * 1.05
 
-        # normalize to valid tick size
         if mid_premium < 3:
-            # Options under $3 trade in $0.01 increments
-            mid_premium = round(round(mid_premium / 0.01) * 0.01, 2)
+            tick = 0.01
         else:
-            # Options $3 or higher trade in $0.05 increments
-            mid_premium = round(round(mid_premium / 0.05) * 0.05, 2)
+            tick = 0.05
 
+        # Use integer division to snap exactly to the tick grid
+        mid_premium = int(round(mid_premium / tick)) * tick
+        mid_premium = round(mid_premium, 2)
 
         #mid_premium = snapshot["mid"] * 1.02
 
@@ -388,22 +388,22 @@ class AppModel:
 
         self._order = order
         return order.to_dict()
-        def get_available_strikes(self, expiry: str) -> List[float]:
-            try:
-                maturities = general_app.tws.get_maturities(self._symbol)
-                return maturities['strikes'] if maturities and expiry in maturities['expirations'] else []
-            except Exception as e:
-                logging.error(f"AppModel[{self._symbol}]: Failed to get strikes: {e}")
-                return []
+    def get_available_strikes(self, expiry: str) -> List[float]:
+        try:
+            maturities = general_app.tws.get_maturities(self._symbol)
+            return maturities['strikes'] if maturities and expiry in maturities['expirations'] else []
+        except Exception as e:
+            logging.error(f"AppModel[{self._symbol}]: Failed to get strikes: {e}")
+            return []
 
-        def cancel_pending_order(self, order_id: str) -> bool:
-            order = self._order
-            if order.order_id == order_id and order.state == OrderState.PENDING:
-                general_app.cancel_order(order_id)
-                order.mark_cancelled()
-                logging.info(f"AppModel[{self._symbol}]: Order cancelled {order_id}")
-                return True
-            return False
+    def cancel_pending_order(self, order_id: str) -> bool:
+        order = self._order
+        if order.order_id == order_id and order.state == OrderState.PENDING:
+            general_app.cancel_order(order_id)
+            order.mark_cancelled()
+            logging.info(f"AppModel[{self._symbol}]: Order cancelled {order_id}")
+            return True
+        return False
 
     def get_order(self) -> Optional[Order]:
         return self._order
