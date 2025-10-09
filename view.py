@@ -414,9 +414,9 @@ class OrderFrame(tk.Frame):
             return
         def worker():
             try:
-                pending = self.model.get_orders("PENDING")
-                for order in pending:
-                    self.model.cancel_pending_order(order["order_id"])
+                pending = self.model.order()
+                
+                self.model.cancel_pending_order(pending.order_id)
                 self._ui(lambda: self._set_status("Pending orders cancelled", "orange"))
             except Exception as e:
                 logging.error(f"Cancel error: {e}")

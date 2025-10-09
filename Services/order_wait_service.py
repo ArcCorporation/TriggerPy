@@ -3,6 +3,7 @@ import time
 import logging
 import time
 from Helpers.Order import Order, OrderState
+from Services.order_manager import order_manager
 from Services.watcher_info import (
     ThreadInfo, watcher_info,
     STATUS_PENDING, STATUS_RUNNING, STATUS_FINALIZED, STATUS_CANCELLED, STATUS_FAILED
@@ -314,6 +315,7 @@ class OrderWaitService:
                             f"(start {start_ts:.0f} → end {end_ts:.0f})")
 
                 order.mark_active(result=f"IB Order ID: {order._ib_order_id}")
+                order_manager.add_finalized_order(order_id, order)
                 msg = f"[WaitService] Order finalized {order_id} → IB ID: {order._ib_order_id}"
                 logging.info(msg)
                 watcher_info.update_watcher(order_id, STATUS_FINALIZED)
