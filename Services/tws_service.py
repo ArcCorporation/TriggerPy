@@ -40,6 +40,49 @@ class TWSService(EWrapper, EClient):
         self.option_chains = {}  # Add this line
         self._pending_orders = {}  # custom_order_id -> Helpers.Order object
 
+    def conn_status(self) -> bool:
+        """
+        Returns True if currently connected to TWS and next_valid_order_id has been set.
+        This method checks both the IB API connection and the internal event flag.
+        """
+        is_alive = self.isConnected() and self.connection_ready.is_set() and self.next_valid_order_id is not None
+        if not is_alive:
+            logging.warning("[TWSService] conn_status: Not connected to TWS")
+        else:
+            logging.info("[TWSService] conn_status: Connected and healthy")
+        return is_alive
+
+
+    def reconnect(self, host: str = "127.0.0.1", port: int = 7497, timeout: int = 10) -> bool:
+        """
+        Attempts to reconnect to TWS/IB Gateway.
+        Safely disconnects first if a stale session exists.
+        Returns True if the reconnection is successful.
+        """
+        try:
+            if self.isConnected():
+                logging.info("[TWSService] reconnect(): Closing existing connection before retry...")
+                try:
+                    self.disconnect_gracefully()
+                    time.sleep(1)
+                except Exception as e:
+                    logging.warning(f"[TWSService] reconnect(): Error while disconnecting: {e}")
+
+            logging.info(f"[TWSService] Attempting reconnection to {host}:{port} (Client ID: {self.client_id})")
+            result = self.connect_and_start(host=host, port=port, timeout=timeout)
+            
+            if result:
+                logging.info("[TWSService] reconnect(): Reconnected successfully.")
+                return True
+            else:
+                logging.error("[TWSService] reconnect(): Reconnection failed.")
+                return False
+
+        except Exception as e:
+            logging.error(f"[TWSService] reconnect(): Exception during reconnection: {e}")
+            return False
+
+
     def nextValidId(self, orderId: int):
         super().nextValidId(orderId)
         self.next_valid_order_id = orderId
