@@ -288,30 +288,46 @@ class TWSService(EWrapper, EClient):
             return None
 
         req_id = self._get_next_req_id()
-        self._contract_details_req_id = req_id
-        self._contract_details[req_id] = None
-        self._contract_details_event.clear()
+        event = threading.Event()
+        self._contract_details[req_id] = {"event": event, "details": None}
+
+        def on_contract_details(reqId, contractDetails):
+            if reqId == req_id:
+                self._contract_details[req_id]["details"] = contractDetails
+                event.set()
+
+        def on_contract_details_end(reqId):
+            if reqId == req_id:
+                event.set()
+
+        # temporarily hook callbacks
+        orig_cd = self.contractDetails
+        orig_cde = self.contractDetailsEnd
+        self.contractDetails = on_contract_details
+        self.contractDetailsEnd = on_contract_details_end
 
         try:
             self.reqContractDetails(req_id, contract)
-
-            if self._contract_details_event.wait(timeout=timeout):
-                details = self._contract_details.get(req_id)
-                if details:
-                    conid = details.contract.conId
+            if event.wait(timeout):
+                data = self._contract_details[req_id]["details"]
+                if data:
+                    conid = data.contract.conId
                     logging.info(f"Resolved conId {conid} for {contract.symbol}")
                     return conid
                 else:
+                    logging.warning(f"No contract details returned for {contract.symbol}")
                     return None
             else:
+                logging.warning(f"Timeout resolving contract for {contract.symbol}")
                 return None
-
         except Exception as e:
             logging.error(f"Error resolving conId: {str(e)}")
             return None
         finally:
-            if req_id in self._contract_details:
-                del self._contract_details[req_id]
+            self.contractDetails = orig_cd
+            self.contractDetailsEnd = orig_cde
+            del self._contract_details[req_id]
+
 
     def create_option_contract(self, symbol: str, last_trade_date: str, strike: float, right: str, 
                              exchange: str = "SMART", currency: str = "USD") -> Contract:
