@@ -315,6 +315,11 @@ class OrderWaitService:
                             f"(start {start_ts:.0f} → end {end_ts:.0f})")
 
                 order.mark_active(result=f"IB Order ID: {order._ib_order_id}")
+                if getattr(order, "_status_callback", None):
+                    try:
+                        order._status_callback(f"Finalized: {order.symbol} {order.order_id}", "green")
+                    except Exception as e:
+                        logging.error(f"[WaitService] UI callback failed for finalized order {order.order_id}: {e}")
                 order_manager.add_finalized_order(order_id, order)
                 msg = f"[WaitService] Order finalized {order_id} → IB ID: {order._ib_order_id}"
                 logging.info(msg)

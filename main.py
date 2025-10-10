@@ -1,9 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
 import logging
-
 import time
-import logging
 from datetime import datetime
 from pathlib import Path
 from Helpers.debugger import DebugFrame, TkinterHandler
@@ -16,9 +14,9 @@ def setup_logging():
     log_dir = Path("logs"); log_dir.mkdir(exist_ok=True)
     log_file = log_dir / (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log")
 
-    root = logging.getLogger()          # grab root explicitly
-    if root.hasHandlers():              # someone else touched it first
-        root.handlers.clear()           # burn it down
+    root = logging.getLogger()
+    if root.hasHandlers():
+        root.handlers.clear()
 
     handler_file = logging.FileHandler(log_file, encoding='utf-8')
     handler_console = logging.StreamHandler()
@@ -28,6 +26,7 @@ def setup_logging():
         root.addHandler(h)
     root.setLevel(logging.INFO)
     logging.info("Logging initialised → %s", log_file)
+
 
 class ArcTriggerApp(tk.Tk):
     def __init__(self):
@@ -55,7 +54,7 @@ class ArcTriggerApp(tk.Tk):
         tk.Button(top_frame, text="Start Trigger", bg="red", fg="white", command=self.build_order_frames).pack(side="left", padx=10)
         tk.Button(top_frame, text="Show Debug", command=self.toggle_debug).pack(side="left", padx=10)
         ttk.Button(top_frame, text="Watchers", command=self.show_watchers).pack(side="left", padx=5)
-        ttk.Button(top_frame, text="Finalized Orders", command=self.show_finalized_console).pack(side="left", padx=5)
+        # Removed: ttk.Button(top_frame, text="Finalized Orders", ...)
 
         # ---------- Order container ----------
         self.order_container = ttk.Frame(self)
@@ -67,14 +66,10 @@ class ArcTriggerApp(tk.Tk):
         self.connect_services()
         self.start_conn_monitor()
 
-        # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
     #  CONNECTION MONITOR THREAD
     # ------------------------------------------------------------------
     def start_conn_monitor(self, interval: int = 5):
-        """
-        Launch a background thread that periodically checks the TWS connection
-        and updates the banner if status changes.
-        """
         import threading
         from Services.tws_service import create_tws_service
 
@@ -95,7 +90,6 @@ class ArcTriggerApp(tk.Tk):
         t = threading.Thread(target=monitor, name="ConnMonitorThread", daemon=True)
         t.start()
         logging.info("Connection monitor thread started.")
-
 
     # ------------------------------------------------------------------
     #  WATCHERS WINDOW
@@ -121,55 +115,6 @@ class ArcTriggerApp(tk.Tk):
                     w["status_label"], w["stop_loss"], w["last_price"],
                     w["start_time"][:19]))
             win.after(2000, refresh)
-        refresh()
-
-    # ------------------------------------------------------------------
-    #  FINALIZED ORDERS CONSOLE  –  BUTTONS INSIDE EACH ROW
-    # ------------------------------------------------------------------
-    def show_finalized_console(self):
-        import tkinter as tk
-        from tkinter import ttk
-        win = tk.Toplevel(self)
-        win.title("Finalized Orders – Manage & Monitor")
-        win.geometry("1000x400")
-
-        cols = ("Order ID", "Symbol", "Type", "Qty", "Strike", "Right",
-                "Entry $", "Trigger $", "Last $", "P/L %", "Actions")
-        tree = ttk.Treeview(win, columns=cols, show="headings")
-        for c in cols:
-            tree.heading(c, text=c)
-            tree.column(c, width=90, anchor="center")
-        # extra room for the button cluster
-        tree.column("#11", width=220, anchor="center")
-        tree.pack(fill="both", expand=True)
-
-        def refresh():
-            tree.delete(*tree.get_children())
-            for oid, order in order_manager.finalized_orders.items():
-                # 1. insert row (placeholder in Actions)
-                iid = tree.insert(
-                    "", "end",
-                    values=(oid, order.symbol, order.action, order.qty,
-                            order.strike, order.right,
-                            f"{order.entry_price:.2f}",
-                            f"{order.trigger:.2f}",
-                            "---", "---", "placeholder")
-                )
-                # 2. build button frame
-                btn_frame = tk.Frame(tree)
-                tk.Button(btn_frame, text="BE", width=4,
-                          command=lambda o=oid: order_manager.breakeven(o)).pack(side="left", padx=1)
-                tk.Button(btn_frame, text="20%", width=4,
-                          command=lambda o=oid: order_manager.take_profit(o, 0.20)).pack(side="left", padx=1)
-                tk.Button(btn_frame, text="30%", width=4,
-                          command=lambda o=oid: order_manager.take_profit(o, 0.30)).pack(side="left", padx=1)
-                tk.Button(btn_frame, text="40%", width=4,
-                          command=lambda o=oid: order_manager.take_profit(o, 0.40)).pack(side="left", padx=1)
-                # 3. slam frame into the cell
-                tree.set(iid, column="Actions", value="")
-                tree.window_create(iid, column="Actions", window=btn_frame)
-            win.after(2000, refresh)
-
         refresh()
 
     # ------------------------------------------------------------------
