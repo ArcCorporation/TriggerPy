@@ -50,15 +50,18 @@ class OrderManager:
             return None
 
         sell_order = Order(
-            symbol=base.symbol,
-            expiry=base.expiry,
-            strike=base.strike,
-            right=base.right,
-            qty=sell_qty,
-            action="SELL",
-            entry_price=0,          # not used for sell
-            limit_price=limit_price
-        )
+        symbol=base.symbol,
+        expiry=base.expiry,
+        strike=base.strike,
+        right=base.right,
+        qty=sell_qty,
+        entry_price=limit_price,   # use as intended sale price
+        tp_price=None,
+        sl_price=None,
+        action="SELL",
+        trigger=None
+    )
+
         sell_order.set_position_size(base._position_size)
 
         ok = self.tws_service.place_custom_order(sell_order)
@@ -95,7 +98,7 @@ class OrderManager:
         """
         base = self.finalized_orders.get(order_id)
         if not base or base.action != "BUY":
-            logging.warning("[OrderManager] take_profit: no buy-order %s", order_id)
+            logging.info("[OrderManager] take_profit: no buy-order %s", order_id)
             return None
 
         # percentage is given as 0.20, 0.30, 0.40
@@ -117,7 +120,7 @@ class OrderManager:
         """
         base = self.finalized_orders.get(order_id)
         if not base or base.action != "BUY":
-            logging.warning("[OrderManager] breakeven: no buy-order %s", order_id)
+            logging.info("[OrderManager] breakeven: no buy-order %s", order_id)
             return None
 
         # use the exact qty that was finally bought

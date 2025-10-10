@@ -491,6 +491,9 @@ class OrderFrame(tk.Frame):
                 order = self.model.order
                 order_manager.take_profit(order.order_id, pct / 100)
                 self._set_status(f"Take Profit {pct}% triggered", "blue")
+            else:
+                logging.error(f"Take-Profit error: ")
+                self._set_status(f"Error: unknown err call Arda", "red")
         except Exception as e:
             logging.error(f"Take-Profit error: {e}")
             self._set_status(f"Error: {e}", "red")
