@@ -6,6 +6,8 @@ from typing import Optional, Callable
 
 from model import general_app, get_model
 from Services import nasdaq_info
+from Services.order_manager import order_manager
+from Helpers.Order import OrderState
 
 
 # ---------------- Banner ----------------
@@ -152,6 +154,7 @@ class OrderFrame(tk.Frame):
         self._symbol_token = 0
         self._maturity_req_id = 0
         self._strike_req_id = 0
+        self.is_finalized = False  # track if this frame's order finalized
 
         # --- Symbol selector ---
         symbol_frame = ttk.Frame(self)
@@ -227,6 +230,21 @@ class OrderFrame(tk.Frame):
         # --- Controls ---
         frame_ctrl = ttk.Frame(self)
         frame_ctrl.grid(row=4, column=0, columnspan=9, pady=8)
+        self.frame_actions = ttk.Frame(self)
+        self.frame_actions.grid(row=6, column=0, columnspan=9, pady=5)
+        self.frame_actions.grid_remove()
+
+        self.btn_be = ttk.Button(self.frame_actions, text="Breakeven",
+                                command=self._on_breakeven, state="disabled")
+        self.btn_be.pack(side="left", padx=3)
+
+        self.tp_buttons = []
+        for pct in (20, 30, 40):
+            btn = ttk.Button(self.frame_actions, text=f"TP {pct}%",
+                            command=lambda p=pct: self._on_take_profit(p),
+                            state="disabled")
+            btn.pack(side="left", padx=3)
+            self.tp_buttons.append(btn)
         self.btn_save = ttk.Button(frame_ctrl, text="Place Order", command=self.place_order, state="disabled")
         self.btn_save.pack(side="left", padx=5)
         ttk.Button(frame_ctrl, text="Cancel Order", command=self.cancel_order).pack(side="left", padx=5)
@@ -283,6 +301,13 @@ class OrderFrame(tk.Frame):
 
     def _set_status(self, text: str, color: str = "gray"):
         self._ui(self.lbl_status.config, text=text, foreground=color)
+        try:
+            if self.model and self.model.order:
+                order = self.model.order
+                if order.state == OrderState.FINALIZED:
+                    self._ui(self._on_order_finalized)
+        except Exception as e:
+            logging.error(f"[OrderFrame] Finalization check error: {e}")
 
     # ---------- events ----------
     def on_symbol_selected(self, symbol: str):
@@ -439,3 +464,33 @@ class OrderFrame(tk.Frame):
         self.entry_tp.delete(0, tk.END)
         self._set_status("Select symbol to start", "gray")
         self.btn_save.config(state="disabled")
+
+    def _on_order_finalized(self):
+        """Enable manual actions when backend finalizes order"""
+        if not self.is_finalized:
+            self.is_finalized = True
+            self.frame_actions.grid()
+            self.btn_be.config(state="normal")
+            for btn in self.tp_buttons:
+                btn.config(state="normal")
+            self._set_status("Order Finalized – controls enabled", "green")
+
+    def _on_breakeven(self):
+        try:
+            if self.model and self.model.order():
+                order = self.model.order()
+                order_manager.breakeven(order.order_id)
+                self._set_status("Breakeven triggered", "blue")
+        except Exception as e:
+            logging.error(f"Breakeven error: {e}")
+            self._set_status(f"Error: {e}", "red")
+
+    def _on_take_profit(self, pct):
+        try:
+            if self.model and self.model.order():
+                order = self.model.order()
+                order_manager.take_profit(order.order_id, pct / 100)
+                self._set_status(f"Take Profit {pct}% triggered", "blue")
+        except Exception as e:
+            logging.error(f"Take-Profit error: {e}")
+            self._set_status(f"Error: {e}", "red")
