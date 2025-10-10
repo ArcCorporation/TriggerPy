@@ -7,10 +7,10 @@ from Services.polygon_service import polygon_service
 from Services.order_wait_service import OrderWaitService
 from Helpers.Order import Order, OrderState
 import random
+
 # --- Singleton: GeneralApp ---
 class GeneralApp:
     def __init__(self):
-        
         self._tws = None
         self._polygon = None
         self._order_wait = None
@@ -31,12 +31,12 @@ class GeneralApp:
                 f.write(m.serialize() + "\n")
         return filename
 
-    def load(self, filename: Optional[str] =  None) -> None:
+    def load(self, filename: Optional[str] = None) -> None:
         """
         Replace current _models with contents of file.
         Clears existing models first.
         """
-        if filename == None:
+        if filename is None:
             raise ValueError(f"[GeneralModel.load()]filename is None")
         self._models.clear()
         with open(filename) as f:
@@ -44,30 +44,29 @@ class GeneralApp:
         if not lines:
             raise ValueError("empty archive")
         n = int(lines[0])
-        for raw in lines[1 : 1 + n]:
+        for raw in lines[1: 1 + n]:
             if not raw.startswith("AppModel:"):
                 continue
             _, mid, odata = raw.split(":", 2)
-            m = AppModel("UNKNOWN")      # symbol will be fixed later if needed
+            m = AppModel("UNKNOWN")  # symbol will be fixed later if needed
             m._id = mid
             m._order = Order.deserialize(odata) if odata != "None" else None
             self._models.add(m)
 
         for model in self._models:
-            if model.order() != None:
+            if model.order() is not None:
                 self._order_wait.add_order(model.order(), "poll")
-        
 
-    def add_model(self,model: "AppModel"):
+    def add_model(self, model: "AppModel"):
         self._models.add(model)
 
     def get_models(self):
         return list(self._models)
-    
+
     def serialize(self):
         pass
 
-    def cancel_order(self,order_id):
+    def cancel_order(self, order_id):
         self.order_wait.cancel_order(order_id)
 
     def get_option_chain(self, symbol: str, expiry: str):
@@ -131,7 +130,7 @@ class GeneralApp:
     @property
     def is_connected(self) -> bool:
         return self._connected
-    
+
     def watch_price(self, symbol, update_fn):
         watcher = PriceWatcher(symbol, update_fn, polygon_service)
         return watcher
@@ -187,16 +186,24 @@ class AppModel:
         self._stop_loss: Optional[float] = None
         self._take_profit: Optional[float] = None
         self._order: Optional[Order] = None
+        self._status_callback: Optional[callable] = None  # added
 
+    # ------------------------------------------------------------------
+    def set_status_callback(self, fn):
+        """Allow UI (OrderFrame) to supply its _set_status method."""
+        if callable(fn):
+            self._status_callback = fn
+        else:
+            self._status_callback = None
+    # ------------------------------------------------------------------
 
-    
     def serialize(self):
         pass
 
     @property
     def symbol(self) -> str:
         return self._symbol
-    
+
     @property
     def order(self):
         return self._order
@@ -284,9 +291,6 @@ class AppModel:
         except Exception as e:
             logging.error(f"AppModel[{self._symbol}]: Failed to get option chain: {e}")
             return []
-    
-    
-
 
     def get_option_price(self, expiry: str, strike: float, right: str):
         chain = self.get_option_chain(expiry)
@@ -308,14 +312,18 @@ class AppModel:
             return False
         return True
 
-    def place_option_order(self,
-                       action: str = "BUY",
-                       position: int = 2000,
-                       quantity: int = 1,
-                       trigger_price: Optional[float] = None) -> Dict:
+    def place_option_order(
+        self,
+        action: str = "BUY",
+        position: int = 2000,
+        quantity: int = 1,
+        trigger_price: Optional[float] = None,
+        status_callback=None,
+    ) -> Dict:
         """
         Create & transmit an option order.  
         Fails gracefully if TWS snapshot times out.
+        status_callback: optional fn(text, color) to attach directly to order.
         """
         # 1. basic sanity
         if not all([self._symbol, self._expiry, self._strike, self._right]):
@@ -329,15 +337,12 @@ class AppModel:
             raise ValueError(f"Trigger {trigger_price} invalid for current price {current_price}")
 
         # 2. live option premium (snapshot) – can time-out
-        snapshot = general_app.get_option_snapshot(self._symbol,
-                                                self._expiry,
-                                                self._strike,
-                                                self._right)
+        snapshot = general_app.get_option_snapshot(
+            self._symbol, self._expiry, self._strike, self._right
+        )
         if snapshot is None or snapshot.get("mid") is None:
             logging.error("place_option_order: TWS snapshot time-out – cannot set TP/SL")
             raise RuntimeError("No option premium available from TWS snapshot")
-
-   
 
         mid_premium = snapshot["ask"] * 1.05
 
@@ -346,13 +351,9 @@ class AppModel:
         else:
             tick = 0.05
 
-        # Use integer division to snap exactly to the tick grid
         mid_premium = int(round(mid_premium / tick)) * tick
         mid_premium = round(mid_premium, 2)
 
-        #mid_premium = snapshot["mid"] * 1.02
-
-        # 3. auto-set TP/SL only if user left them blank
         if self._stop_loss is None:
             self._stop_loss = round(mid_premium * 0.8, 2)
         if self._take_profit is None:
@@ -369,29 +370,46 @@ class AppModel:
             tp_price=self._take_profit,
             sl_price=self._stop_loss,
             action=action.upper(),
-            trigger=trigger_price
+            trigger=trigger_price,
         )
         order.set_position_size(float(position))
+
+        # attach callback if provided either explicitly or via model-level default
+        cb = status_callback or self._status_callback
+        if cb:
+            try:
+                order.set_status_callback(cb)
+            except Exception as e:
+                logging.error(f"Failed to attach status callback: {e}")
 
         # 5. immediate or waiting execution
         if not trigger_price or order.is_triggered(current_price):
             success = general_app.place_custom_order(order)
             if success:
-                order.mark_active(result=f"IB Order ID: {getattr(order, '_ib_order_id', 'Unknown')}")
+                order.mark_active(
+                    result=f"IB Order ID: {getattr(order, '_ib_order_id', 'Unknown')}"
+                )
                 logging.info(f"AppModel[{self._symbol}]: Order executed {order.order_id}")
             else:
                 order.mark_failed("Failed to place order")
                 logging.error(f"AppModel[{self._symbol}]: Order failed {order.order_id}")
         else:
             general_app.order_wait.add_order(order, mode="poll")
-            logging.info(f"AppModel[{self._symbol}]: Order waiting breakout {order.order_id}")
+            logging.info(
+                f"AppModel[{self._symbol}]: Order waiting breakout {order.order_id}"
+            )
 
         self._order = order
         return order.to_dict()
+
     def get_available_strikes(self, expiry: str) -> List[float]:
         try:
             maturities = general_app.tws.get_maturities(self._symbol)
-            return maturities['strikes'] if maturities and expiry in maturities['expirations'] else []
+            return (
+                maturities["strikes"]
+                if maturities and expiry in maturities["expirations"]
+                else []
+            )
         except Exception as e:
             logging.error(f"AppModel[{self._symbol}]: Failed to get strikes: {e}")
             return []
@@ -433,6 +451,7 @@ class AppModel:
 
 # --- Per-symbol model registry ---
 _models: Dict[str, AppModel] = {}
+
 
 def get_model(symbol: str) -> AppModel:
     s = symbol.upper()
