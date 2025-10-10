@@ -290,7 +290,7 @@ class OrderFrame(tk.Frame):
         self.model = get_model(symbol)
         self._symbol_token += 1
         token = self._symbol_token
-
+        self.model.set_status_callback(self._set_status)
         self._set_status(f"Ready: {symbol}", "blue")
         self.btn_save.config(state="normal")
 
