@@ -321,6 +321,7 @@ class OrderWaitService:
                     except Exception as e:
                         logging.error(f"[WaitService] UI callback failed for finalized order {order.order_id}: {e}")
                 order_manager.add_finalized_order(order_id, order)
+                order.mark_finalized(result=f"IB Order ID: {order._ib_order_id}")
                 msg = f"[WaitService] Order finalized {order_id} → IB ID: {order._ib_order_id}"
                 logging.info(msg)
                 watcher_info.update_watcher(order_id, STATUS_FINALIZED)

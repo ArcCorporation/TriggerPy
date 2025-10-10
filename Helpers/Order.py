@@ -2,7 +2,7 @@ from typing import Optional
 import uuid
 import enum
 from ibapi.order import Order as IBOrder  # import IB's order class
-
+import logging
 
 class OrderState(enum.Enum):
     PENDING = "pending"
@@ -145,6 +145,13 @@ class Order:
         if reason:
             msg += f" – {reason}"
         self._notify(msg, "red")
+    
+    def mark_finalized(self, result=None):
+        self.state = OrderState.FINALIZED
+        self.result = result
+        msg =f"Order {self.order_id} finalized with result: {result}"
+        self._notify(msg, "green")
+
 
     def to_dict(self):
         return {
