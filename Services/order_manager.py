@@ -101,8 +101,15 @@ class OrderManager:
         # percentage is given as 0.20, 0.30, 0.40
         sell_qty = max(1, int(base.qty * percentage))
         profit_price = round(base.trigger * (1 + percentage), 2)
+        logging.info(f"[OrderManager] TAKE PROFIT triggered for {order_id}: "
+             f"{percentage*100:.0f}% target → trigger={base.trigger}, "
+             f"limit={round(base.trigger*(1+percentage),2)}, qty={max(1,int(base.qty*percentage))}")
 
-        return self.issue_sell_order(order_id, sell_qty, limit_price=profit_price)
+        x =  self.issue_sell_order(order_id, sell_qty, limit_price=profit_price)
+        logging.info(f"[OrderManager] TAKE PROFIT after sell for {order_id}: "
+             f"{percentage*100:.0f}% target → trigger={base.trigger}, "
+             f"limit={round(base.trigger*(1+percentage),2)}, qty={max(1,int(base.qty*percentage))}")
+        return x
 
     def breakeven(self, order_id: str) -> Optional[str]:
         """
@@ -117,6 +124,9 @@ class OrderManager:
         sell_qty = base.qty
         # breakeven = trigger price of the original buy
         breakeven_price = base.trigger
+        logging.info(f"[OrderManager] BREAKEVEN triggered for {order_id}: "
+             f"symbol={base.symbol}, qty={base.qty}, price={base.trigger}")
+
 
         return self.issue_sell_order(order_id, sell_qty, limit_price=breakeven_price)
 

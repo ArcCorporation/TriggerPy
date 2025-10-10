@@ -54,7 +54,7 @@ class GeneralApp:
             self._models.add(m)
 
         for model in self._models:
-            if model.order() is not None:
+            if model.order is not None:
                 self._order_wait.add_order(model.order(), "poll")
 
     def add_model(self, model: "AppModel"):
