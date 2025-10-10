@@ -39,6 +39,7 @@ class TWSService(EWrapper, EClient):
         # Track custom orders from Helpers.Order
         self.option_chains = {}  # Add this line
         self._pending_orders = {}  # custom_order_id -> Helpers.Order object
+        self._last_print = 0
 
     def conn_status(self) -> bool:
         """
@@ -49,7 +50,10 @@ class TWSService(EWrapper, EClient):
         if not is_alive:
             logging.warning("[TWSService] conn_status: Not connected to TWS")
         else:
-            logging.info("[TWSService] conn_status: Connected and healthy")
+            now = time.time()
+            if now - self._last_print >= 3:
+                logging.info("[TWSService] conn_status: Connected and healthy")
+                self._last_print = now
         return is_alive
 
 
