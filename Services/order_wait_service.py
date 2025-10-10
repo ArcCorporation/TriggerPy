@@ -33,7 +33,7 @@ class OrderWaitService:
         order_id = order.order_id
 
         # Register ThreadInfo
-        tinfo = ThreadInfo(order_id, order.symbol, watcher_type="trigger", mode=mode)
+        tinfo = ThreadInfo(order_id, order.symbol, watcher_type="trigger", stop_loss=order.sl_price, mode=mode)
         watcher_info.add_watcher(tinfo)
         tinfo.update_status(STATUS_RUNNING)
 
