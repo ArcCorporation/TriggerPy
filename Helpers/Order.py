@@ -9,6 +9,7 @@ class OrderState(enum.Enum):
     ACTIVE = "active"
     CANCELLED = "cancelled"
     FAILED = "failed"
+    FINALIZED = "finalized"  # ← add this
 
 
 class Order:

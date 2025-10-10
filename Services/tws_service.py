@@ -51,7 +51,7 @@ class TWSService(EWrapper, EClient):
             logging.warning("[TWSService] conn_status: Not connected to TWS")
         else:
             now = time.time()
-            if now - self._last_print >= 3:
+            if now - self._last_print >= 60:
                 logging.info("[TWSService] conn_status: Connected and healthy")
                 self._last_print = now
         return is_alive

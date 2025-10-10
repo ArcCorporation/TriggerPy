@@ -232,7 +232,7 @@ class OrderFrame(tk.Frame):
         frame_ctrl.grid(row=4, column=0, columnspan=9, pady=8)
         self.frame_actions = ttk.Frame(self)
         self.frame_actions.grid(row=6, column=0, columnspan=9, pady=5)
-        self.frame_actions.grid_remove()
+        #self.frame_actions.grid_remove()
 
         self.btn_be = ttk.Button(self.frame_actions, text="Breakeven",
                                 command=self._on_breakeven, state="disabled")
