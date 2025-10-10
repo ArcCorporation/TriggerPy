@@ -447,10 +447,12 @@ class TWSService(EWrapper, EClient):
 
             custom_order.qty = qty
             # Convert your custom order to IB order
+            closing = custom_order.action == "SELL"
             ib_order = custom_order.to_ib_order(
                 order_type="LMT",
                 limit_price=custom_order.entry_price,
-                transmit=True
+                transmit=True,
+                closing=closing
             )
             ib_order.account = account
 

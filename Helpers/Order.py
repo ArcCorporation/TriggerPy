@@ -176,7 +176,7 @@ class Order:
         return True
 
     def to_ib_order(self, order_type="LMT", limit_price=None, stop_price=None,
-                    parent_id=None, transmit=True) -> IBOrder:
+                    parent_id=None, transmit=True,closing=False) -> IBOrder:
         """
         Convert this custom Order into an Interactive Brokers IBOrder.
         - order_type: "MKT", "LMT", or "STP"
@@ -186,7 +186,9 @@ class Order:
         - transmit: whether to transmit immediately
         """
         ib_order = IBOrder()
-        ib_order.action = self.action
+        ib_order.action = ("SELL_TO_CLOSE" if closing and self.action == "BUY" else
+                       "BUY_TO_CLOSE"  if closing and self.action == "SELL" else
+                       self.action)
         ib_order.totalQuantity = self.qty
         ib_order.orderType = order_type
 
