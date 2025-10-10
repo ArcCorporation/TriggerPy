@@ -14,7 +14,7 @@ class OrderState(enum.Enum):
 class Order:
     def __init__(self, symbol, expiry, strike, right,
                  qty, entry_price, tp_price, sl_price,
-                 action="BUY", type = "LMT",trigger=None):
+                 action="BUY", type="LMT", trigger=None):
         """
         Temel Order nesnesi.
         """
@@ -35,6 +35,30 @@ class Order:
         self.state = OrderState.PENDING if trigger else OrderState.ACTIVE
         self.result = None  # finalize edildiğinde TWS’ten dönen order id seti
 
+    # ----------------------------------------------------------------------
+    # Status Callback Handling (added)
+    # ----------------------------------------------------------------------
+    def set_status_callback(self, fn):
+        """
+        Attach a direct GUI status updater (e.g. OrderFrame._set_status).
+        Expected signature: fn(text: str, color: str)
+        """
+        if not callable(fn):
+            raise ValueError("Callback must be callable")
+        self._status_callback = fn
+        return self
+
+    def _notify(self, text: str, color: str):
+        """Safely invoke attached status callback if present."""
+        cb = getattr(self, "_status_callback", None)
+        if cb:
+            try:
+                cb(text, color)
+            except Exception as e:
+                import logging
+                logging.error(f"Order[{self.order_id}] UI callback failed: {e}")
+
+    # ----------------------------------------------------------------------
 
     def serialize(self) -> str:
         """
@@ -80,10 +104,10 @@ class Order:
             return True
         if self.right == "CALL" or self.right == "C":
             return market_price > self.trigger
-        elif self.right == "PUT"or self.right == "P":
+        elif self.right == "PUT" or self.right == "P":
             return market_price < self.trigger
         return False
-    
+
     def calc_contracts_from_premium(self, premium: float) -> int:
         """Compute integer contracts that fit budget at *live* premium."""
         if self._position_size is None:
@@ -91,7 +115,7 @@ class Order:
         if premium <= 0:
             raise ValueError("Premium must be > 0")
         contracts = int(self._position_size // (premium * 100))
-        return max(1, contracts)          # at least 1 contract
+        return max(1, contracts)  # at least 1 contract
 
     def set_position_size(self, dollars: float) -> "Order":
         """Attach dollar budget and return self for chaining."""
@@ -103,13 +127,23 @@ class Order:
     def mark_active(self, result=None):
         self.state = OrderState.ACTIVE
         self.result = result
+        msg = f"Order {self.order_id} Active"
+        if result:
+            msg += f" – {result}"
+        self._notify(msg, "green")
 
     def mark_cancelled(self):
         self.state = OrderState.CANCELLED
+        msg = f"Order {self.order_id} Cancelled"
+        self._notify(msg, "gray")
 
     def mark_failed(self, reason=None):
         self.state = OrderState.FAILED
         self.result = reason
+        msg = f"Order {self.order_id} Failed"
+        if reason:
+            msg += f" – {reason}"
+        self._notify(msg, "red")
 
     def to_dict(self):
         return {
@@ -127,7 +161,7 @@ class Order:
             "state": self.state.value,
             "result": self.result,
         }
-    
+
     def move_stop_to_breakeven(self) -> bool:
         """
         Set stop loss to entry_price (breakeven).
