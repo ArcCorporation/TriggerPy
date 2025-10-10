@@ -439,7 +439,7 @@ class OrderFrame(tk.Frame):
             return
         def worker():
             try:
-                pending = self.model.order()
+                pending = self.model.order
                 
                 self.model.cancel_pending_order(pending.order_id)
                 self._ui(lambda: self._set_status("Pending orders cancelled", "orange"))
@@ -477,8 +477,8 @@ class OrderFrame(tk.Frame):
 
     def _on_breakeven(self):
         try:
-            if self.model and self.model.order():
-                order = self.model.order()
+            if self.model and self.model.order:
+                order = self.model.order
                 order_manager.breakeven(order.order_id)
                 self._set_status("Breakeven triggered", "blue")
         except Exception as e:
@@ -487,8 +487,8 @@ class OrderFrame(tk.Frame):
 
     def _on_take_profit(self, pct):
         try:
-            if self.model and self.model.order():
-                order = self.model.order()
+            if self.model and self.model.order:
+                order = self.model.order
                 order_manager.take_profit(order.order_id, pct / 100)
                 self._set_status(f"Take Profit {pct}% triggered", "blue")
         except Exception as e:
