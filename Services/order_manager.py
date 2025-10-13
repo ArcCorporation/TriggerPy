@@ -64,7 +64,7 @@ class OrderManager:
 
         sell_order.set_position_size(base._position_size)
 
-        ok = self.tws_service.place_custom_order(sell_order)
+        ok = self.tws_service.sell_custom_order(sell_order)
         if ok:
             logging.info("[OrderManager] sell order placed -> ID %s", sell_order.order_id)
             return sell_order.order_id
