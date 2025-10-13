@@ -162,7 +162,7 @@ class OrderWaitService:
                                 strike=order.strike,
                                 right=order.right,
                                 qty=order.qty,
-                                entry_price=last_price,
+                                entry_price=order.entry_price,
                                 tp_price=None,
                                 sl_price=stop_loss_price,
                                 action="SELL",
