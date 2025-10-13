@@ -428,8 +428,8 @@ class OrderFrame(tk.Frame):
                 logging.info(f"Order placed: {order_data}")
             except Exception as e:
                 def err():
-                    E = e
-                    self._set_status(f"Order failed: {E}", "red")
+                    self._e = e
+                    self._set_status(f"Order failed: {self._e}", "red")
                     self.btn_save.config(state="normal")
                 self._ui(err)
                 logging.error(f"Order failed: {e}")
