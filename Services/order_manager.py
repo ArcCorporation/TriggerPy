@@ -116,7 +116,7 @@ class OrderManager:
         profit_price = mid_premium
 
         logging.info(f"[OrderManager] TAKE PROFIT triggered for {order_id}: "
-                    f"{sell_pct*100:.0f}% qty @ {profit_pct*100:.0f}% profit "
+                    f"{sell_pct*100:.0f}% qty @ {sell_pct *100}% profit "
                     f"(limit={profit_price}, entry={base.entry_price})")
 
         return self.issue_sell_order(order_id, sell_qty, limit_price=profit_price)
