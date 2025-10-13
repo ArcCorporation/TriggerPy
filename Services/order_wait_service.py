@@ -169,7 +169,7 @@ class OrderWaitService:
                                 trigger=None
                             )
                             sell_order.set_position_size(order._position_size)
-                            success = self.tws.place_custom_order(sell_order)
+                            success = self.tws.sell_custom_order(sell_order)
                             if success:
                                 sell_order.mark_active(result=f"Stop-loss triggered @ {last_price}")
                                 logging.info(f"[StopLoss] Order {order.order_id} exited via stop-loss at {last_price}")

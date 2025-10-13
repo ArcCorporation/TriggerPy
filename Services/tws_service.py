@@ -518,6 +518,60 @@ class TWSService(EWrapper, EClient):
         self.connection_ready.clear()
         self.disconnect()
     
+    def sell_custom_order(self, custom_order, account: str = "") -> bool:
+        """
+        Dedicated SELL method for option orders.
+        - Keeps all old logic intact (no rewriting).
+        - Uses Order.action to decide sell side, so you can flip easily.
+        """
+        if not self.is_connected():
+            logging.error("Cannot place SELL order: Not connected to TWS")
+            return False
+
+        try:
+            # Force action to SELL, regardless of how order was initialized
+            custom_order.action = "SELL"
+
+            ib_right = "C" if custom_order.right.upper() in ["C", "CALL"] else "P"
+            contract = self.create_option_contract(
+                symbol=custom_order.symbol,
+                last_trade_date=custom_order.expiry,
+                strike=custom_order.strike,
+                right=ib_right,
+                exchange="SMART",
+                currency="USD"
+            )
+
+            conid = self.resolve_conid(contract)
+            if not conid:
+                logging.error(f"Could not resolve contract for {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right}")
+                custom_order.mark_failed("Contract resolution failed")
+                return False
+            contract.conId = conid
+
+            ib_order = custom_order.to_ib_order(
+                order_type=custom_order.type,
+                limit_price=custom_order.entry_price,  # could be TP or entry, your call
+                transmit=True
+            )
+            ib_order.account = account
+
+            order_id = self.next_valid_order_id
+            custom_order._ib_order_id = order_id
+            self._pending_orders[custom_order.order_id] = custom_order
+
+            self.placeOrder(order_id, contract, ib_order)
+            logging.info(f"[TWSService] SELL placed: {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right} (x{custom_order.qty}) -> ID {order_id}")
+
+            self.next_valid_order_id += 1
+            return True
+
+        except Exception as e:
+            logging.error(f"[TWSService] Failed to sell order {custom_order.order_id}: {e}")
+            custom_order.mark_failed(reason=str(e))
+            return False
+
+    
     def get_option_premium(self,
                     symbol: str,
                     expiry: str,
