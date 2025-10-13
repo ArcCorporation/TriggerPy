@@ -447,6 +447,61 @@ class AppModel:
             "take_profit": self._take_profit,
             "orders": [o.to_dict() for o in self._orders],
         }
+    
+    def serialize(self) -> str:
+        """
+        Serialize model in at most two lines:
+        Line 1: AppModel:<id>:<symbol>:<expiry>:<strike>:<right>:<stop_loss>:<take_profit>:<has_order>
+        Line 2 (optional): serialized order if present
+        """
+        expiry = self._expiry or "None"
+        strike = self._strike or "None"
+        right = self._right or "None"
+        sl = self._stop_loss if self._stop_loss is not None else "None"
+        tp = self._take_profit if self._take_profit is not None else "None"
+
+        has_order = bool(self._order)
+        base_line = (
+            f"AppModel:{self._id}:{self._symbol}:{expiry}:{strike}:{right}:{sl}:{tp}:{has_order}"
+        )
+
+        if has_order:
+            return base_line + "\n" + self._order.serialize()
+        else:
+            return base_line
+
+    @classmethod
+    def deserialize(cls, lines: list[str]) -> "AppModel":
+        """
+        Deserialize model from one or two lines.
+        The first line must start with 'AppModel:'.
+        If 'has_order' is True, second line must start with 'Order:'.
+        Returns the new model and the number of lines consumed.
+        """
+        header = lines[0].split(":")
+        if len(header) < 9 or header[0] != "AppModel":
+            raise ValueError("Invalid AppModel serialization")
+
+        _, mid, symbol, expiry, strike, right, sl, tp, has_order = header
+        model = cls(symbol)
+        model._id = mid
+        model._expiry = None if expiry == "None" else expiry
+        model._strike = None if strike == "None" else float(strike)
+        model._right = None if right == "None" else right
+        model._stop_loss = None if sl == "None" else float(sl)
+        model._take_profit = None if tp == "None" else float(tp)
+
+        has_order = has_order == "True"
+        consumed = 1
+
+        if has_order:
+            if len(lines) < 2 or not lines[1].startswith("Order:"):
+                raise ValueError("Missing Order line after AppModel")
+            model._order = Order.deserialize(lines[1])
+            consumed = 2
+
+        return model, consumed
+
 
 
 # --- Per-symbol model registry ---
