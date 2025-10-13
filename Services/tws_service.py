@@ -459,7 +459,9 @@ class TWSService(EWrapper, EClient):
             premium = self.get_option_premium(custom_order.symbol,custom_order.expiry,custom_order.strike, ib_right)
             if not premium or premium <= 0:
                 raise RuntimeError(f"No live premium for {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right}")
-            qty = custom_order.calc_contracts_from_premium(premium)
+            
+            base_price = custom_order.entry_price or premium
+            qty = custom_order.calc_contracts_from_premium(base_price)
 
             custom_order.qty = qty
             # Convert your custom order to IB order
