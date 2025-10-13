@@ -343,7 +343,7 @@ class OrderWaitService:
                     )
                     ex_order = exit_order.set_position_size(order._position_size) 
                     ex_order.mark_active()
-                    logging.info(f"[WAITSERVICE] Spawned exit order {exit_order.order_id} "
+                    logging.info(f"[WAITSERVICE] Spawned exit order {ex_order.order_id} "
                             f"stop={stop_loss_level} ({order.right})")
                     self.start_stop_loss_watcher(ex_order, stop_loss_level)
 
