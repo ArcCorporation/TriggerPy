@@ -521,15 +521,14 @@ class TWSService(EWrapper, EClient):
     def sell_custom_order(self, custom_order, account: str = "") -> bool:
         """
         Dedicated SELL method for option orders.
-        - Keeps all old logic intact (no rewriting).
-        - Uses Order.action to decide sell side, so you can flip easily.
+        - Dynamically recalculates quantity from live premium if position_size is set.
+        - Falls back to custom_order.qty if manually specified.
         """
         if not self.is_connected():
             logging.error("Cannot place SELL order: Not connected to TWS")
             return False
 
         try:
-            # Force action to SELL, regardless of how order was initialized
             custom_order.action = "SELL"
 
             ib_right = "C" if custom_order.right.upper() in ["C", "CALL"] else "P"
@@ -549,9 +548,21 @@ class TWSService(EWrapper, EClient):
                 return False
             contract.conId = conid
 
+            # ✅ Recalculate quantity based on live premium if _position_size available
+            premium = self.get_option_premium(custom_order.symbol, custom_order.expiry, custom_order.strike, ib_right)
+            if not premium or premium <= 0:
+                raise RuntimeError(f"No live premium for {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right}")
+
+            if getattr(custom_order, "_position_size", None):
+                qty = custom_order.calc_contracts_from_premium(premium)
+                custom_order.qty = qty
+            elif not getattr(custom_order, "qty", None):
+                raise RuntimeError("SELL order has neither qty nor position_size set")
+
+            # Build IB order
             ib_order = custom_order.to_ib_order(
                 order_type=custom_order.type,
-                limit_price=custom_order.entry_price,  # could be TP or entry, your call
+                limit_price=custom_order.entry_price,
                 transmit=True
             )
             ib_order.account = account
@@ -561,7 +572,12 @@ class TWSService(EWrapper, EClient):
             self._pending_orders[custom_order.order_id] = custom_order
 
             self.placeOrder(order_id, contract, ib_order)
-            logging.info(f"[TWSService] SELL placed: {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right} (x{custom_order.qty}) -> ID {order_id}")
+            custom_order._placed_ts = time.time() * 1000
+            logging.info(
+                f"[TWSService] SELL placed: {custom_order.symbol} {custom_order.expiry} "
+                f"{custom_order.strike}{ib_right} x{custom_order.qty} @ {custom_order.entry_price} "
+                f"→ ID {order_id}"
+            )
 
             self.next_valid_order_id += 1
             return True
@@ -570,6 +586,7 @@ class TWSService(EWrapper, EClient):
             logging.error(f"[TWSService] Failed to sell order {custom_order.order_id}: {e}")
             custom_order.mark_failed(reason=str(e))
             return False
+
 
     
     def get_option_premium(self,
