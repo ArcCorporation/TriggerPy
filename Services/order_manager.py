@@ -102,7 +102,18 @@ class OrderManager:
             return None
 
         sell_qty = max(1, int(base.qty * sell_pct))
-        profit_price = round(base.entry_price * (1 + profit_pct), 2)
+        order = self.finalized_orders[order_id]
+        snapshot = self.tws.get_option_snapshot(order.symbol, order.expiry, order.strike, order.right)
+        if not snapshot or snapshot.get("ask") is None:
+            logging.info("[StopLOrderManageross] Snapshot timeout – cannot compute premium")
+            return
+
+        mid_premium = snapshot["ask"] * 1.05
+        tick = 0.01 if mid_premium < 3 else 0.05
+        mid_premium = int(round(mid_premium / tick)) * tick
+        mid_premium = round(mid_premium, 2)
+
+        profit_price = mid_premium
 
         logging.info(f"[OrderManager] TAKE PROFIT triggered for {order_id}: "
                     f"{sell_pct*100:.0f}% qty @ {profit_pct*100:.0f}% profit "
@@ -122,7 +133,16 @@ class OrderManager:
         # use the exact qty that was finally bought
         sell_qty = base.qty
         # breakeven = trigger price of the original buy
-        breakeven_price = base.entry_price
+        snapshot = self.tws.get_option_snapshot(order.symbol, order.expiry, order.strike, order.right)
+        if not snapshot or snapshot.get("ask") is None:
+            logging.info("[StopLOrderManageross] Snapshot timeout – cannot compute premium")
+            return
+
+        mid_premium = snapshot["ask"] * 1.05
+        tick = 0.01 if mid_premium < 3 else 0.05
+        mid_premium = int(round(mid_premium / tick)) * tick
+        mid_premium = round(mid_premium, 2)
+        breakeven_price = mid_premium
         logging.info(f"[OrderManager] BREAKEVEN triggered for {order_id}: "
              f"symbol={base.symbol}, qty={base.qty}, price={base.entry_price}")
 
