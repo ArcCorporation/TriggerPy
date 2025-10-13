@@ -166,10 +166,10 @@ class OrderFrame(tk.Frame):
         ttk.Label(self, text="Trigger").grid(row=1, column=0)
         self.entry_trigger = ttk.Entry(self, width=8)
         self.entry_trigger.grid(row=1, column=1, padx=5)
-        self.bind('<Up>',   lambda e: self._bump_trigger(+0.50))
-        self.bind('<Down>', lambda e: self._bump_trigger(-0.50))
-        self.bind('<Control-Up>',   lambda e: self._bump_trigger(+0.10))
-        self.bind('<Control-Down>', lambda e: self._bump_trigger(-0.10))
+        self.entry_trigger.bind('<Up>',   lambda e: self._bump_trigger(+0.50))
+        self.entry_trigger.bind('<Down>', lambda e: self._bump_trigger(-0.50))
+        self.entry_trigger.bind('<Control-Up>',   lambda e: self._bump_trigger(+0.10))
+        self.entry_trigger.bind('<Control-Down>', lambda e: self._bump_trigger(-0.10))
 
         # --- Type + Order type ---
         self.var_type = tk.StringVar(value="CALL")
