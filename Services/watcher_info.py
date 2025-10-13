@@ -91,6 +91,10 @@ class WatcherInfo:
         self._watchers: Dict[str, ThreadInfo] = {}
         self._lock = threading.Lock()
 
+    def remove(self, order_id):
+        with self._lock:
+            self._watchers.pop(order_id)
+
     def add_watcher(self, thread_info: ThreadInfo):
         with self._lock:
             self._watchers[thread_info.order_id] = thread_info

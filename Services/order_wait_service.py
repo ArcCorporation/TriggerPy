@@ -55,6 +55,7 @@ class OrderWaitService:
                     while True:
                         with self.lock:
                             if order_id not in self.pending_orders or order_id in self.cancelled_orders:
+                                watcher_info.remove(order_id)
                                 return
                         snap = self.polygon.get_snapshot(order.symbol)
                         if not snap:
