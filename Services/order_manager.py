@@ -92,7 +92,7 @@ class OrderManager:
                 setattr(self.finalized_orders[order_id], key, value)
             logging.info(f"Updated order {order_id} with new attributes.")
 
-    def take_profit(self, order_id: str, profit_pct: float, sell_pct: float) -> Optional[str]:
+    def take_profit(self, order_id: str,  sell_pct: float) -> Optional[str]:
         """
         Sell a portion (sell_pct) of the contracts once option gains profit_pct.
         """
