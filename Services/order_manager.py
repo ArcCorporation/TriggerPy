@@ -92,28 +92,24 @@ class OrderManager:
                 setattr(self.finalized_orders[order_id], key, value)
             logging.info(f"Updated order {order_id} with new attributes.")
 
-    def take_profit(self, order_id: str, percentage: float) -> Optional[str]:
+    def take_profit(self, order_id: str, profit_pct: float, sell_pct: float) -> Optional[str]:
         """
-        Sell a percentage (0–1) of the contracts at trigger × (1 + percentage).
+        Sell a portion (sell_pct) of the contracts once option gains profit_pct.
         """
         base = self.finalized_orders.get(order_id)
         if not base or base.action != "BUY":
             logging.info("[OrderManager] take_profit: no buy-order %s", order_id)
             return None
 
-        # percentage is given as 0.20, 0.30, 0.40
-        sell_qty = max(1, int(base.qty * percentage))
-        profit_price = round(base.trigger * (1 + percentage), 2)
+        sell_qty = max(1, int(base.qty * sell_pct))
+        profit_price = round(base.entry_price * (1 + profit_pct), 2)
+
         logging.info(f"[OrderManager] TAKE PROFIT triggered for {order_id}: "
-             f"{percentage*100:.0f}% target → trigger={base.trigger}, "
-             f"limit={round(base.trigger*(1+percentage),2)}, qty={max(1,int(base.qty*percentage))}")
+                    f"{sell_pct*100:.0f}% qty @ {profit_pct*100:.0f}% profit "
+                    f"(limit={profit_price}, entry={base.entry_price})")
 
-        x =  self.issue_sell_order(order_id, sell_qty, limit_price=profit_price)
-        logging.info(f"[OrderManager] TAKE PROFIT after sell for {order_id}: "
-             f"{percentage*100:.0f}% target → trigger={base.trigger}, "
-             f"limit={round(base.trigger*(1+percentage),2)}, qty={max(1,int(base.qty*percentage))}")
-        return x
-
+        return self.issue_sell_order(order_id, sell_qty, limit_price=profit_price)
+    
     def breakeven(self, order_id: str) -> Optional[str]:
         """
         Sell 100 % of the contracts at the original trigger price (breakeven).
@@ -126,9 +122,9 @@ class OrderManager:
         # use the exact qty that was finally bought
         sell_qty = base.qty
         # breakeven = trigger price of the original buy
-        breakeven_price = base.trigger
+        breakeven_price = base.entry_price
         logging.info(f"[OrderManager] BREAKEVEN triggered for {order_id}: "
-             f"symbol={base.symbol}, qty={base.qty}, price={base.trigger}")
+             f"symbol={base.symbol}, qty={base.qty}, price={base.entry_price}")
 
 
         return self.issue_sell_order(order_id, sell_qty, limit_price=breakeven_price)
