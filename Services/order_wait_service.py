@@ -155,6 +155,16 @@ class OrderWaitService:
 
                     if triggered:
                         try:
+                            snapshot = self.tws.get_option_snapshot(order.symbol, order.expiry, order.strike, order.right)
+                            if not snapshot or snapshot.get("ask") is None:
+                                logging.error("[StopLoss] Snapshot timeout – cannot compute premium")
+                                tinfo.update_status(STATUS_FAILED, info={"error": "No snapshot"})
+                                return
+
+                            mid_premium = snapshot["ask"] * 1.05
+                            tick = 0.01 if mid_premium < 3 else 0.05
+                            mid_premium = int(round(mid_premium / tick)) * tick
+                            mid_premium = round(mid_premium, 2)
                             # Market-sell the full position
                             sell_order = Order(
                                 symbol=order.symbol,
@@ -162,7 +172,7 @@ class OrderWaitService:
                                 strike=order.strike,
                                 right=order.right,
                                 qty=order.qty,
-                                entry_price=order.entry_price,
+                                entry_price=mid_premium,
                                 tp_price=None,
                                 sl_price=stop_loss_price,
                                 action="SELL",
@@ -325,6 +335,7 @@ class OrderWaitService:
                 msg = f"[WaitService] Order finalized {order_id} → IB ID: {order._ib_order_id}"
                 logging.info(msg)
                 watcher_info.update_watcher(order_id, STATUS_FINALIZED)
+                
 
                 # ✅ if stop-loss configured, launch stop-loss watcher
                 if order.trigger and order.sl_price:
