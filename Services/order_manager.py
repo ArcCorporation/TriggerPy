@@ -103,7 +103,7 @@ class OrderManager:
 
         sell_qty = max(1, int(base.qty * sell_pct))
         order = self.finalized_orders[order_id]
-        snapshot = self.tws.get_option_snapshot(order.symbol, order.expiry, order.strike, order.right)
+        snapshot = self.tws_service.get_option_snapshot(order.symbol, order.expiry, order.strike, order.right)
         if not snapshot or snapshot.get("ask") is None:
             logging.info("[StopLOrderManageross] Snapshot timeout – cannot compute premium")
             return

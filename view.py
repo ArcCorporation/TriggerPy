@@ -477,24 +477,32 @@ class OrderFrame(tk.Frame):
             self._set_status("Order Finalized – controls enabled", "green")
 
     def _on_breakeven(self):
-        try:
-            if self.model and self.model.order:
-                order = self.model.order
-                order_manager.breakeven(order.order_id)
-                self._set_status("Breakeven triggered", "blue")
-        except Exception as e:
-            logging.error(f"Breakeven error: {e}")
-            self._set_status(f"Error: {e}", "red")
+        def worker():
+            try:
+                if self.model and self.model.order:
+                    order = self.model.order
+                    order_manager.breakeven(order.order_id)
+                    self._ui(lambda: self._set_status("Breakeven triggered", "blue"))
+                else:
+                    self._ui(lambda: self._set_status("Error: No active order", "red"))
+            except Exception as e:
+                logging.error(f"Breakeven error: {e}")
+                self._ui(lambda: self._set_status(f"Error: {e}", "red"))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _on_take_profit(self, pct):
-        try:
-            if self.model and self.model.order:
-                order = self.model.order
-                order_manager.take_profit(order.order_id, pct / 100)
-                self._set_status(f"Take Profit {pct}% triggered", "blue")
-            else:
-                logging.error(f"Take-Profit error: ")
-                self._set_status(f"Error: unknown err call Arda", "red")
-        except Exception as e:
-            logging.error(f"Take-Profit error: {e}")
-            self._set_status(f"Error: {e}", "red")
+        def worker():
+            try:
+                if self.model and self.model.order:
+                    order = self.model.order
+                    order_manager.take_profit(order.order_id, pct / 100)
+                    self._ui(lambda: self._set_status(f"Take Profit {pct}% triggered", "blue"))
+                else:
+                    logging.error("Take-Profit error: No active order")
+                    self._ui(lambda: self._set_status("Error: No active order", "red"))
+            except Exception as e:
+                logging.error(f"Take-Profit error: {e}")
+                self._ui(lambda: self._set_status(f"Error: {e}", "red"))
+
+        threading.Thread(target=worker, daemon=True).start()
