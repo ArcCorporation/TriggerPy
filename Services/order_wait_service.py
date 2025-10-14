@@ -152,7 +152,7 @@ class OrderWaitService:
                     if premium is None or premium <= 0:          # safety: can't price the option
                         logging.error("[StopLoss] No live premium – aborting exit")
                         tinfo.update_status(STATUS_FAILED, info={"error": "No premium"})
-                        raise ValueError(f"[StopLoss] No live premium – aborting exit")
+                        return
 
 
                     if triggered:
@@ -167,28 +167,28 @@ class OrderWaitService:
                             tick = 0.01 if mid_premium < 3 else 0.05
                             mid_premium = int(round(mid_premium / tick)) * tick
                             mid_premium = round(mid_premium, 2)
-                            # Market-sell the full position
-                            sell_order = Order(
-                                symbol=order.symbol,
-                                expiry=order.expiry,
-                                strike=order.strike,
-                                right=order.right,
-                                qty=order.qty,
-                                entry_price=mid_premium,
-                                tp_price=None,
-                                sl_price=stop_loss_price,
-                                action="SELL",
-                                trigger=None
+                            pos = self.tws.get_position_by_order_id(order.order_id)
+                            if not pos or pos.get("qty", 0) <= 0:
+                                logging.warning(f"[StopLoss] No live position for {order.order_id}, cannot exit.")
+                                tinfo.update_status(STATUS_FAILED, info={"error": "No position"})
+                                return
+
+                            live_qty = int(pos["qty"])
+                            success = self.tws.sell_position_by_order_id(
+                                order.order_id,
+                                qty=live_qty,
+                                limit_price=mid_premium
                             )
-                            sell_order.set_position_size(order._position_size)
-                            success = self.tws.sell_custom_order(sell_order)
                             if success:
-                                sell_order.mark_active(result=f"Stop-loss triggered @ {last_price}")
-                                logging.info(f"[StopLoss] Order {order.order_id} exited via stop-loss at {last_price}")
+                                logging.info(f"[StopLoss] Sold {live_qty} {order.symbol} via TWS position map @ {mid_premium}")
+                                order.mark_finalized(f"Stop-loss triggered @ {last_price}")
                                 tinfo.update_status(STATUS_FINALIZED, last_price=last_price)
                             else:
-                                logging.error(f"[StopLoss] Failed to execute stop-loss for {order.order_id}")
+                                logging.error(f"[StopLoss] TWS refused stop-loss sell for {order.order_id}")
                                 tinfo.update_status(STATUS_FAILED, last_price=last_price)
+                       
+                            
+                            
                         except Exception as e:
                             logging.error(f"[StopLoss] Exception in stop-loss for {order.order_id}: {e}")
                             tinfo.update_status(STATUS_FAILED, info={"error": str(e)})
