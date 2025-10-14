@@ -8,6 +8,7 @@ import time
 import logging
 import random
 from typing import List, Dict, Optional
+from Helpers.Order import Order
 
 # Configure logging
 
@@ -184,8 +185,11 @@ class TWSService(EWrapper, EClient):
                             "right": base.right,
                         }
                 if pos:
-                    pos["qty"] = filled
-                    pos["avg_price"] = avgFillPrice
+                    pos["qty"] = int(filled or 0)
+                    pos["avg_price"] = float(avgFillPrice or pos.get("avg_price", 0.0))
+
+                    #pos["qty"] = filled
+                    #pos["avg_price"] = avgFillPrice
                     self._positions_by_order_id[order_uuid] = pos
         except Exception as e:
             logging.error(f"[TWSService] position-tracking hook failed for order {orderId}: {e}")
@@ -197,24 +201,32 @@ class TWSService(EWrapper, EClient):
         order_id = self._ib_to_order_id.get(execution.orderId)
         if not order_id:
             return
+
         pos = self._positions_by_order_id.get(order_id)
         if not pos:
             return
 
-        old_qty = pos["qty"]
-        old_avg = pos["avg_price"]
-        new_qty = old_qty + execution.shares
+        side = (execution.side or "").upper()   # BOT or SLD
+        old_qty = int(pos["qty"])
+        old_avg = float(pos["avg_price"])
+        shares = int(execution.shares)
+        price = float(execution.price)
 
-        if new_qty > 0:
-            new_avg = ((old_avg * old_qty) + (execution.price * execution.shares)) / new_qty
-        else:
+        if side == "BOT":
+            new_qty = old_qty + shares
+            new_avg = ((old_avg * old_qty) + (price * shares)) / new_qty if new_qty > 0 else old_avg
+        elif side == "SLD":
+            new_qty = max(0, old_qty - shares)
             new_avg = old_avg
+        else:
+            new_qty, new_avg = old_qty, old_avg
 
         pos["qty"] = new_qty
         pos["avg_price"] = new_avg
         self._positions_by_order_id[order_id] = pos
 
-        logging.info(f"[TWSService] execDetails update {order_id}: qty={new_qty}, avg={new_avg}")
+        logging.info(f"[TWSService] execDetails update {order_id}: side={side} qty={new_qty}, avg={new_avg}")
+
 
 
     def securityDefinitionOptionParameter(self, reqId: int, exchange: str,
