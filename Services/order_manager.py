@@ -22,56 +22,25 @@ class OrderManager:
                      sell_qty: int,
                      limit_price: Optional[float] = None) -> Optional[str]:
         """
-        Create and transmit a **sell** order for an already-finalised long position.
-
-        Parameters
-        ----------
-        base_order_id : str
-            The key under which the original BUY order is stored in `self.finalized_orders`.
-        sell_qty : int
-            Number of option contracts to sell (must be ≤ original buy qty).
-        limit_price : float | None
-            Limit price per contract.  
-            If **None** → sent as a **market** order (IB will treat it as LMT with no limit).
-
-        Returns
-        -------
-        str | None
-            The new **sell** order ID if TWS accepted the order, otherwise **None**.
+        Sell an existing TWS-tracked position by its order_id.
+        Uses tws_service.sell_position_by_order_id() for consistency.
         """
-        base = self.finalized_orders.get(base_order_id)
-        if not base or base.action != "BUY":
-            logging.warning("[OrderManager] issue_sell_order: no buy-order %s", base_order_id)
+        logging.info(f"[OrderManager] is attempting sale of options {base_order_id}:{sell_qty}:{limit_price}")
+        pos = self.tws_service.get_position_by_order_id(base_order_id)
+        if not pos or pos.get("qty", 0) <= 0:
+            logging.info(f"[OrderManager] issue_sell_order: no live position for {base_order_id}")
             return None
 
-        if sell_qty <= 0 or sell_qty > base.qty:
-            logging.warning("[OrderManager] issue_sell_order: invalid sell qty %s for order %s",
-                            sell_qty, base_order_id)
-            return None
-
-        sell_order = Order(
-        symbol=base.symbol,
-        expiry=base.expiry,
-        strike=base.strike,
-        right=base.right,
-        qty=sell_qty,
-        entry_price=limit_price,   # use as intended sale price
-        tp_price=None,
-        sl_price=None,
-        action="SELL",
-        trigger=None
-    )
-
-        sell_order.set_position_size(base._position_size)
-
-        ok = self.tws_service.sell_custom_order(sell_order)
+        # use TWSService’s built-in position selling
+        ok = self.tws_service.sell_position_by_order_id(
+            base_order_id, qty=sell_qty, limit_price=limit_price
+        )
         if ok:
-            logging.info("[OrderManager] sell order placed -> ID %s", sell_order.order_id)
-            return sell_order.order_id
+            logging.info(f"[OrderManager] sell order placed -> base={base_order_id}, qty={sell_qty}, limit={limit_price}")
+            return base_order_id  # keep same id for tracking continuity
 
-        logging.error("[OrderManager] sell order failed for %s", base_order_id)
+        logging.error(f"[OrderManager] sell order failed for {base_order_id}")
         return None
-
 
 
 
