@@ -4,7 +4,7 @@ import logging
 import threading
 from typing import Optional, Callable
 
-from model import general_app, get_model
+from model import general_app, get_model, AppModel
 from Services import nasdaq_info
 from Services.order_manager import order_manager
 from Helpers.Order import OrderState
@@ -506,3 +506,77 @@ class OrderFrame(tk.Frame):
                 self._ui(lambda: self._set_status(f"Error: {e}", "red"))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    
+    def serialize(self) -> str:
+        """
+        Serialize this frame's UI metadata and its associated model.
+        The frame never inspects or manipulates model.order directly.
+
+        Layer delimiters:
+            Frame   → '|'
+            Model   → ':'
+            Order   → '_'
+
+        Output Example:
+            <Frame>|id=1|state=ACTIVE|symbol=AAPL
+            AppModel:18dc9329:AAPL:20251018:195.0:C:2.1:2.7:True
+            Order:18dc9329_AAPL_20251018_195.0_C_1_2.35_2.5_2.0_BUY_195.1_PENDING_None
+        """
+        frame_id = getattr(self, "frame_id", id(self))
+        state = getattr(self, "_view_state", "UNKNOWN")
+        symbol = getattr(self.model, "symbol", "None") if hasattr(self, "model") else "None"
+
+        header = f"<Frame>|id={frame_id}|state={state}|symbol={symbol}"
+
+        model = getattr(self, "model", None)
+        if model is not None:
+            model_block = model.serialize()
+            return f"{header}\n{model_block}"
+        return header
+
+    @classmethod
+    def deserialize(cls, lines: list[str], parent) -> tuple["OrderFrame", int]:
+        """
+        Deserialize a frame block and its attached model.
+
+        Expected input:
+            <Frame>|id=<id>|state=<state>|symbol=<symbol>
+            AppModel:...
+            [Order:...]
+
+        Returns:
+            (OrderFrame instance, lines_consumed)
+        """
+        if not lines or not lines[0].startswith("<Frame>|"):
+            raise ValueError("Expected a line starting with '<Frame>|'")
+
+        # --- Parse frame header ---
+        parts = lines[0].split("|")
+        frame_id = None
+        state = "UNKNOWN"
+        symbol = "None"
+
+        for p in parts[1:]:
+            if p.startswith("id="):
+                frame_id = p.split("=", 1)[1]
+            elif p.startswith("state="):
+                state = p.split("=", 1)[1]
+            elif p.startswith("symbol="):
+                symbol = p.split("=", 1)[1]
+
+        frame = cls(parent)
+        frame.frame_id = frame_id
+        frame._view_state = state
+        frame.symbol_var.set("" if symbol == "None" else symbol)
+
+        consumed = 1
+
+        # --- Parse AppModel if present ---
+        if len(lines) > 1 and lines[1].startswith("AppModel:"):
+            model, used = AppModel.deserialize(lines[1:3])
+            frame.model = model
+            consumed += used
+
+        return frame, consumed
+

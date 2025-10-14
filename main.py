@@ -9,6 +9,12 @@ from Services.order_manager import order_manager
 from model import general_app
 from view import Banner, OrderFrame
 from Services.watcher_info import watcher_info
+import os
+import threading
+from datetime import datetime, timedelta
+
+
+AUTO_SAVE_INTERVAL_MIN = 15
 
 def setup_logging():
     log_dir = Path("logs"); log_dir.mkdir(exist_ok=True)
@@ -65,6 +71,119 @@ class ArcTriggerApp(tk.Tk):
         self.disconnect_services()
         self.connect_services()
         self.start_conn_monitor()
+        self.start_auto_save_thread()
+
+# Attempt auto-restore on startup
+        restored = self.load_session(auto=True)
+        if restored:
+            logging.info("[ArcTriggerApp] Previous session auto-restored.")
+        else:
+            logging.info("[ArcTriggerApp] No recent session to restore.")
+
+    def save_session(self, filename: str = "arctrigger.dat", background: bool = False):
+        """
+        Save all visible order frames and their models/orders to arctrigger.dat.
+        Includes a timestamp header for auto-restore logic.
+        """
+        try:
+            lines = []
+            lines.append(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            lines.append(str(len(self.order_frames)))
+
+            for frame in self.order_frames:
+                serialized = frame.serialize()
+                lines.extend(serialized.split("\n"))
+
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+
+            if not background:
+                logging.info(f"[ArcTriggerApp.save_session] Saved {len(self.order_frames)} frames → {filename}")
+            else:
+                logging.info(f"[ArcTriggerApp.auto_save] Background autosave complete.")
+
+        except Exception as e:
+            logging.error(f"[ArcTriggerApp.save_session] Failed to save session: {e}")
+
+    
+    def load_session(self, filename: str = "arctrigger.dat", auto=False):
+        """
+        Load frames and their models/orders from arctrigger.dat.
+        If auto=True, only loads if file timestamp <= 15 minutes old.
+        """
+        if not os.path.exists(filename):
+            logging.info(f"[ArcTriggerApp.load_session] No session file found.")
+            return False
+
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                lines = [ln.strip() for ln in f if ln.strip()]
+        except Exception as e:
+            logging.error(f"[ArcTriggerApp.load_session] Failed to read {filename}: {e}")
+            return False
+
+        if len(lines) < 2:
+            logging.warning("[ArcTriggerApp.load_session] File incomplete.")
+            return False
+
+        # Check timestamp
+        try:
+            timestamp = datetime.strptime(lines[0], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            logging.warning("[ArcTriggerApp.load_session] Invalid timestamp header.")
+            return False
+
+        if auto:
+            if datetime.now() - timestamp > timedelta(minutes=15):
+                logging.info("[ArcTriggerApp.load_session] Last session older than 15 minutes, skipping auto-restore.")
+                return False
+
+        try:
+            count = int(lines[1])
+        except ValueError:
+            logging.error("[ArcTriggerApp.load_session] Invalid frame count header.")
+            return False
+
+        # Clear current frames
+        for frame in self.order_frames:
+            frame.destroy()
+        self.order_frames.clear()
+
+        idx = 2
+        loaded = 0
+        while idx < len(lines):
+            if not lines[idx].startswith("<Frame>|"):
+                idx += 1
+                continue
+            try:
+                frame, consumed = OrderFrame.deserialize(lines[idx:], parent=self.order_container)
+                frame.pack(fill="x", pady=10, padx=10)
+                self.order_frames.append(frame)
+                loaded += 1
+                idx += consumed
+            except Exception as e:
+                logging.error(f"[ArcTriggerApp.load_session] Error loading frame at line {idx}: {e}")
+                idx += 1
+
+        logging.info(f"[ArcTriggerApp.load_session] Restored {loaded}/{count} frames.")
+        return True
+    
+    def start_auto_save_thread(self):
+        """
+        Background thread that saves the session every 15 minutes.
+        Runs indefinitely until app exits.
+        """
+        def _loop():
+            while True:
+                try:
+                    self.save_session(background=True)
+                except Exception as e:
+                    logging.error(f"[ArcTriggerApp.auto_save] Error: {e}")
+                threading.Event().wait(AUTO_SAVE_INTERVAL_MIN * 60)
+
+        t = threading.Thread(target=_loop, daemon=True)
+        t.start()
+        logging.info(f"[ArcTriggerApp] Auto-save thread started ({AUTO_SAVE_INTERVAL_MIN} min interval).")
 
     # ------------------------------------------------------------------
     #  CONNECTION MONITOR THREAD

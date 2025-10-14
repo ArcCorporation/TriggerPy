@@ -17,45 +17,86 @@ class GeneralApp:
         self._connected = False
         self._models = set()
 
-    def save(self, filename: Optional[str] = None) -> str:
+    def save(self, filename: Optional[str] = "ARCTRIGGER.DAT") -> str:
         """
-        Persist current _models to disk.
-        If filename is None, generate Arc_N.txt with N in 0..1000.
-        Returns the filename actually used.
+        Save all models to ARCTRIGGER.DAT (or given filename) in this format:
+
+            N
+            AppModel:...
+            [Order:...]
+            AppModel:...
+            ...
+
+        Returns the filename used.
         """
-        if filename is None:
-            filename = f"Arc_{random.randint(0, 1000)}.txt"
-        with open(filename, "w") as f:
-            f.write(f"{len(self._models)}\n")
-            for m in self._models:
-                f.write(m.serialize() + "\n")
+        lines = [str(len(self._models))]
+        for m in self._models:
+            serialized = m.serialize()
+            for ln in serialized.split("\n"):
+                lines.append(ln)
+
+        try:
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+            logging.info(f"[GeneralApp.save()] Saved {len(self._models)} models → {filename}")
+        except Exception as e:
+            logging.error(f"[GeneralApp.save()] Failed to save models: {e}")
+            raise
+
         return filename
 
-    def load(self, filename: Optional[str] = None) -> None:
+    def load(self, filename: Optional[str] = "ARCTRIGGER.DAT") -> None:
         """
-        Replace current _models with contents of file.
-        Clears existing models first.
+        Load models from ARCTRIGGER.DAT (or given filename).
+        Each model may consume 1 or 2 lines depending on whether it has an order.
         """
-        if filename is None:
-            raise ValueError(f"[GeneralModel.load()]filename is None")
-        self._models.clear()
-        with open(filename) as f:
-            lines = [ln.rstrip("\n") for ln in f if ln.strip()]
-        if not lines:
-            raise ValueError("empty archive")
-        n = int(lines[0])
-        for raw in lines[1: 1 + n]:
-            if not raw.startswith("AppModel:"):
-                continue
-            _, mid, odata = raw.split(":", 2)
-            m = AppModel("UNKNOWN")  # symbol will be fixed later if needed
-            m._id = mid
-            m._order = Order.deserialize(odata) if odata != "None" else None
-            self._models.add(m)
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                lines = [ln.strip() for ln in f if ln.strip()]
+        except FileNotFoundError:
+            logging.warning(f"[GeneralApp.load()] File not found: {filename}")
+            return
+        except Exception as e:
+            logging.error(f"[GeneralApp.load()] Failed to read file: {e}")
+            return
 
+        if not lines:
+            logging.warning(f"[GeneralApp.load()] File empty: {filename}")
+            return
+
+        try:
+            count = int(lines[0])
+        except Exception as e:
+            logging.error(f"[GeneralApp.load()] Invalid header line: {e}")
+            return
+
+        self._models.clear()
+        idx = 1
+        loaded = 0
+
+        while idx < len(lines):
+            if not lines[idx].startswith("AppModel:"):
+                idx += 1
+                continue
+            try:
+                model, consumed = AppModel.deserialize(lines[idx: idx + 2])
+                self._models.add(model)
+                loaded += 1
+                idx += consumed
+            except Exception as e:
+                logging.error(f"[GeneralApp.load()] Error parsing model at line {idx}: {e}")
+                idx += 1  # skip to next line safely
+
+        logging.info(f"[GeneralApp.load()] Restored {loaded}/{count} models from {filename}")
+
+        # Reattach pending orders (safe)
         for model in self._models:
-            if model.order is not None:
-                self._order_wait.add_order(model.order(), "poll")
+            if model.order and model.order.state == OrderState.PENDING:
+                try:
+                    self._order_wait.add_order(model.order, mode="poll")
+                    logging.info(f"[GeneralApp.load()] Reattached pending order {model.order.order_id}")
+                except Exception as e:
+                    logging.error(f"[GeneralApp.load()] Failed to reattach order: {e}")
 
     def add_model(self, model: "AppModel"):
         self._models.add(model)
@@ -63,8 +104,8 @@ class GeneralApp:
     def get_models(self):
         return list(self._models)
 
-    def serialize(self):
-        pass
+    def amount_of_models(self):
+        return len(self._models)
 
     def cancel_order(self, order_id):
         self.order_wait.cancel_order(order_id)
@@ -197,8 +238,7 @@ class AppModel:
             self._status_callback = None
     # ------------------------------------------------------------------
 
-    def serialize(self):
-        pass
+    
 
     @property
     def symbol(self) -> str:
@@ -512,4 +552,5 @@ def get_model(symbol: str) -> AppModel:
     s = symbol.upper()
     if s not in _models:
         _models[s] = AppModel(s)
+        general_app.add_model(_models[s])
     return _models[s]
