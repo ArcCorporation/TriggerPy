@@ -51,7 +51,7 @@ class Order:
         self.sl_price = sl_price
         self.action = action.upper()
         self.trigger = trigger  # float ya da None
-
+        self._ib_order_id = 0
         self.state = OrderState.PENDING if trigger else OrderState.ACTIVE
         self.result = None  # finalize edildiğinde TWS’ten dönen order id seti
 

@@ -40,6 +40,8 @@ class TWSService(EWrapper, EClient):
         self.option_chains = {}  # Add this line
         self._pending_orders = {}  # custom_order_id -> Helpers.Order object
         self._last_print = 0
+        self._positions_by_order_id: dict[str, dict] = {}
+        self._ib_to_order_id: dict[int, str] = {}
 
     def conn_status(self) -> bool:
         """
@@ -162,12 +164,58 @@ class TWSService(EWrapper, EClient):
                 elif status in ["Cancelled", "ApiCancelled"]:
                     custom_order.mark_cancelled()
                     logging.info(f"Custom order {custom_order_id} cancelled")
+        
+
+        try:
+        # map IB numeric id → our UUID order_id
+            order_uuid = self._ib_to_order_id.get(orderId)
+            if order_uuid:
+                pos = self._positions_by_order_id.get(order_uuid)
+                if not pos:
+                    # initialize position entry if this is the first time we see it
+                    base = self._pending_orders.get(order_uuid)
+                    if base:
+                        pos = {
+                            "qty": 0,
+                            "avg_price": 0.0,
+                            "symbol": base.symbol,
+                            "expiry": base.expiry,
+                            "strike": base.strike,
+                            "right": base.right,
+                        }
+                if pos:
+                    pos["qty"] = filled
+                    pos["avg_price"] = avgFillPrice
+                    self._positions_by_order_id[order_uuid] = pos
+        except Exception as e:
+            logging.error(f"[TWSService] position-tracking hook failed for order {orderId}: {e}")
 
     def openOrder(self, orderId, contract, order: IBOrder, orderState):
         logging.info(f"Order opened - ID: {orderId}, Symbol: {contract.symbol}")
 
     def execDetails(self, reqId, contract, execution):
-        logging.info(f"Order executed - ID: {execution.orderId}, Price: {execution.price}")
+        order_id = self._ib_to_order_id.get(execution.orderId)
+        if not order_id:
+            return
+        pos = self._positions_by_order_id.get(order_id)
+        if not pos:
+            return
+
+        old_qty = pos["qty"]
+        old_avg = pos["avg_price"]
+        new_qty = old_qty + execution.shares
+
+        if new_qty > 0:
+            new_avg = ((old_avg * old_qty) + (execution.price * execution.shares)) / new_qty
+        else:
+            new_avg = old_avg
+
+        pos["qty"] = new_qty
+        pos["avg_price"] = new_avg
+        self._positions_by_order_id[order_id] = pos
+
+        logging.info(f"[TWSService] execDetails update {order_id}: qty={new_qty}, avg={new_avg}")
+
 
     def securityDefinitionOptionParameter(self, reqId: int, exchange: str,
                                         underlyingConId: int, tradingClass: str,
@@ -472,8 +520,20 @@ class TWSService(EWrapper, EClient):
                 transmit=True,
                 closing=closing
             )
+            order = custom_order
             ib_order.account = account
+            ib_order_id = self.next_valid_order_id
+            order._ib_order_id = ib_order_id
+            self._ib_to_order_id[ib_order_id] = order.order_id
 
+            self._positions_by_order_id[order.order_id] = {
+                "qty": 0,
+                "avg_price": 0.0,
+                "symbol": order.symbol,
+                "expiry": order.expiry,
+                "strike": order.strike,
+                "right": order.right,
+}
             # Store the custom order for tracking
             self._pending_orders[custom_order.order_id] = custom_order
             
@@ -589,8 +649,40 @@ class TWSService(EWrapper, EClient):
             custom_order.mark_failed(reason=str(e))
             return False
 
+    def get_position_by_order_id(self, order_id: str):
+        return self._positions_by_order_id.get(order_id)
 
-    
+    def has_position(self, order_id: str) -> bool:
+        pos = self._positions_by_order_id.get(order_id)
+        return bool(pos and pos["qty"] > 0)
+
+    def sell_position_by_order_id(self, order_id: str, qty: int | None = None,
+                              limit_price: float | None = None, account: str = "") -> bool:
+        pos = self._positions_by_order_id.get(order_id)
+        if not pos or pos["qty"] <= 0:
+            logging.warning(f"[TWSService] sell_position_by_order_id: no live position for {order_id}")
+            return False
+
+        sell_qty = qty or pos["qty"]
+
+        sell_order = Order(
+            symbol=pos["symbol"],
+            expiry=pos["expiry"],
+            strike=pos["strike"],
+            right=pos["right"],
+            qty=sell_qty,
+            entry_price=limit_price or pos["avg_price"],
+            action="SELL",
+        )
+
+        ok = self.sell_custom_order(sell_order, account=account)
+        if ok:
+            pos["qty"] -= sell_qty
+            if pos["qty"] <= 0:
+                self._positions_by_order_id.pop(order_id, None)
+                logging.info(f"[TWSService] Position closed for {order_id}")
+        return ok
+
     def get_option_premium(self,
                     symbol: str,
                     expiry: str,
