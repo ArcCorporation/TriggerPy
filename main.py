@@ -12,7 +12,7 @@ from Services.watcher_info import watcher_info
 import os
 import threading
 from datetime import datetime, timedelta
-
+from Services.runtime_manager import runtime_man
 
 AUTO_SAVE_INTERVAL_MIN = 15
 
@@ -71,7 +71,12 @@ class ArcTriggerApp(tk.Tk):
         self.disconnect_services()
         self.connect_services()
         self.start_conn_monitor()
+
+        self._running = runtime_man.is_run()
         self.start_auto_save_thread()
+        self.protocol("WM_DELETE_WINDOW", self.on_exit)
+        
+
 
 # Attempt auto-restore on startup
         restored = self.load_session(auto=True)
@@ -88,6 +93,7 @@ class ArcTriggerApp(tk.Tk):
         try:
             lines = []
             lines.append(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            logging.info(f"save frame count{len(self.order_frames)}")
             lines.append(str(len(self.order_frames)))
 
             for frame in self.order_frames:
@@ -171,10 +177,10 @@ class ArcTriggerApp(tk.Tk):
     def start_auto_save_thread(self):
         """
         Background thread that saves the session every 15 minutes.
-        Runs indefinitely until app exits.
+        Terminates gracefully when _running becomes False.
         """
         def _loop():
-            while True:
+            while self._running:
                 try:
                     self.save_session(background=True)
                 except Exception as e:
@@ -183,7 +189,28 @@ class ArcTriggerApp(tk.Tk):
 
         t = threading.Thread(target=_loop, daemon=True)
         t.start()
+        self._autosave_thread = t
         logging.info(f"[ArcTriggerApp] Auto-save thread started ({AUTO_SAVE_INTERVAL_MIN} min interval).")
+
+    def on_exit(self):
+        """
+        Triggered when the user closes the app window.
+        Performs a final autosave, stops background threads,
+        and safely destroys the Tkinter root.
+        """
+        try:
+            logging.info("[ArcTriggerApp.on_exit] Application exiting, performing final save...")
+            runtime_man.stop()
+            self._running = runtime_man.is_run()  # stop autosave loop
+
+            self.save_session("arctrigger.dat")
+            logging.info("[ArcTriggerApp.on_exit] Final session autosaved.")
+        except Exception as e:
+            logging.error(f"[ArcTriggerApp.on_exit] Error during final save: {e}")
+        finally:
+            self.destroy()
+            logging.info("[ArcTriggerApp.on_exit] Tkinter window destroyed.")
+
 
     # ------------------------------------------------------------------
     #  CONNECTION MONITOR THREAD
@@ -290,6 +317,10 @@ class ArcTriggerApp(tk.Tk):
 
 # ---------- ENTRY ----------
 if __name__ == "__main__":
+    import atexit
+    atexit.register(lambda: os.path.exists("arctrigger.dat") or None)
+
     setup_logging()
     app = ArcTriggerApp()
     app.mainloop()
+

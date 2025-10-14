@@ -1,7 +1,7 @@
 # Services/price_watcher.py
 import threading
 import time
-
+from Services.runtime_manager import runtime_man
 
 class PriceWatcher:
     def __init__(self, symbol: str, update_fn, polygon_service, poll_interval: float = 1.0):
@@ -36,6 +36,7 @@ class PriceWatcher:
             except Exception as e:
                 print(f"[PriceWatcher] Error: {e}")
             time.sleep(self.poll_interval)
+            self.running = runtime_man.is_run()
 
     def get_price(self):
         """En son bilinen fiyatı döndürür (None olabilir)."""

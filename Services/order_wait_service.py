@@ -8,6 +8,7 @@ from Services.watcher_info import (
     ThreadInfo, watcher_info,
     STATUS_PENDING, STATUS_RUNNING, STATUS_FINALIZED, STATUS_CANCELLED, STATUS_FAILED
 )
+from Services.runtime_manager import runtime_man
 
 
 class OrderWaitService:
@@ -52,7 +53,7 @@ class OrderWaitService:
                 delay = 2
                 last = 0
                 try:
-                    while True:
+                    while runtime_man.is_run():
                         with self.lock:
                             if order_id not in self.pending_orders or order_id in self.cancelled_orders:
                                 watcher_info.remove(order_id)
@@ -120,7 +121,7 @@ class OrderWaitService:
             delay = 5
             try:
                 logging.info(f"[StopLoss] Watching {order.symbol} stop-loss @ {stop_loss_price}  ({order.right})")
-                while True:
+                while runtime_man.is_run():
                     if order.state not in (OrderState.ACTIVE, OrderState.PENDING):
                         logging.info(f"[StopLoss] Order {order.order_id} no longer active, stopping watcher.")
                         tinfo.update_status(STATUS_CANCELLED)
