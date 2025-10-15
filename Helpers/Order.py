@@ -40,6 +40,7 @@ class Order:
         Temel Order nesnesi.
         """
         self.order_id = str(uuid.uuid4())
+        self.previous_id = None
         self._position_size: Optional[float] = None   # dollars
         self.type = type
         self.symbol = symbol

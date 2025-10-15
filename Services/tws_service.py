@@ -175,13 +175,11 @@ class TWSService(EWrapper, EClient):
                 logging.info(f"[TWSService] Order {custom_uuid} now ACTIVE on IB")
 
             elif status_str == "filled":
-                # ✅ Proper fill handling
                 custom_order.mark_finalized(result=f"Filled {filled} @ {avgFillPrice}")
                 logging.info(f"[TWSService] Order {custom_uuid} FINALIZED (filled={filled} @ {avgFillPrice})")
                 if getattr(custom_order, "_fill_event", None):
                     custom_order._fill_event.set()
 
-                # Maintain live position snapshot
                 pos = self._positions_by_order_id.get(custom_uuid, {
                     "qty": 0,
                     "avg_price": 0.0,
@@ -193,6 +191,11 @@ class TWSService(EWrapper, EClient):
                 pos["qty"] = int(filled or 0)
                 pos["avg_price"] = float(avgFillPrice or pos.get("avg_price", 0.0))
                 self._positions_by_order_id[custom_uuid] = pos
+
+                # 🩵 NEW: Mirror to symbol index for StopLoss lookups
+                if not hasattr(self, "_positions_by_symbol"):
+                    self._positions_by_symbol = {}
+                self._positions_by_symbol[custom_order.symbol] = custom_uuid
 
             elif status_str in ("cancelled", "apicancelled"):
                 custom_order.mark_cancelled()
@@ -697,9 +700,19 @@ class TWSService(EWrapper, EClient):
     def get_position_by_order_id(self, order_id: str):
         return self._positions_by_order_id.get(order_id)
 
-    def has_position(self, order_id: str) -> bool:
-        pos = self._positions_by_order_id.get(order_id)
-        return bool(pos and pos["qty"] > 0)
+    def has_position(self, order_id_or_symbol: str) -> bool:
+        # check by UUID first
+        pos = self._positions_by_order_id.get(order_id_or_symbol)
+        if pos and pos["qty"] > 0:
+            return True
+        # fallback by symbol
+        if hasattr(self, "_positions_by_symbol"):
+            uuid = self._positions_by_symbol.get(order_id_or_symbol)
+            if uuid:
+                pos = self._positions_by_order_id.get(uuid)
+                return bool(pos and pos["qty"] > 0)
+        return False
+
 
     def sell_position_by_order_id(self, order_id: str, qty: int | None = None,
                               limit_price: float | None = None, account: str = "") -> bool:

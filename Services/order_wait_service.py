@@ -167,9 +167,9 @@ class OrderWaitService:
                             tick = 0.01 if mid_premium < 3 else 0.05
                             mid_premium = int(round(mid_premium / tick)) * tick
                             mid_premium = round(mid_premium, 2)
-                            pos = self.tws.get_position_by_order_id(order.order_id)
+                            pos = self.tws.get_position_by_order_id(order.previous_id)
                             if not pos or pos.get("qty", 0) <= 0:
-                                logging.warning(f"[StopLoss] No live position for {order.order_id}, cannot exit.")
+                                logging.warning(f"[StopLoss] No live position for {order.previous_id}, cannot exit.")
                                 tinfo.update_status(STATUS_FAILED, info={"error": "No position"})
                                 return
 
@@ -362,6 +362,7 @@ class OrderWaitService:
                         ex_order.mark_active()
                         logging.info(f"[WAITSERVICE] Spawned exit order {ex_order.order_id} "
                                 f"stop={stop_loss_level} ({order.right})")
+                        ex_order.previous_id = order.order_id
                         self.start_stop_loss_watcher(ex_order, stop_loss_level)
 
             else:
