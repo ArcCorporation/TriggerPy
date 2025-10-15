@@ -150,8 +150,12 @@ class OrderWaitService:
                         order.symbol, order.expiry, order.strike, order.right
                     )
                     if premium is None or premium <= 0:          # safety: can't price the option
+                        pos = self.tws.get_position_by_order_id(order.previous_id)
+                    if pos:
+                        premium = pos["avg_price"]
+                        logging.warning(f"[StopLoss] Using fallback avg_price={premium} for {order.symbol}")
+                    else:
                         logging.error("[StopLoss] No live premium – aborting exit")
-                        tinfo.update_status(STATUS_FAILED, info={"error": "No premium"})
                         return
 
 
