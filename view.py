@@ -388,7 +388,7 @@ class OrderFrame(tk.Frame):
             return
 
         try:
-            position_size = float(self.entry_pos_size.get() or 2000)
+            position_size = float(self.entry_pos_size.get() or 50000)
             maturity = self.combo_maturity.get()
             right = self.var_type.get()
             quantity = int(self.entry_qty.get() or 1)
@@ -416,7 +416,8 @@ class OrderFrame(tk.Frame):
                     self.model._take_profit = tp
 
                 order_data = self.model.place_option_order(
-                    action="BUY", quantity=quantity, trigger_price=trigger
+                    action="BUY", quantity=quantity, trigger_price=trigger,
+                    position=position_size
                 )
                 state = order_data.get("state", "UNKNOWN")
                 msg = f"Order {state}: {order_data.get('order_id')}"

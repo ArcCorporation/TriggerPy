@@ -384,7 +384,7 @@ class AppModel:
             logging.error("place_option_order: TWS snapshot time-out – cannot set TP/SL")
             raise RuntimeError("No option premium available from TWS snapshot")
 
-        mid_premium = snapshot["ask"] * 1.05
+        mid_premium = snapshot["ask"] * 1.10
 
         if mid_premium < 3:
             tick = 0.01
