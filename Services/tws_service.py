@@ -177,25 +177,22 @@ class TWSService(EWrapper, EClient):
             elif status_str == "filled":
                 custom_order.mark_finalized(result=f"Filled {filled} @ {avgFillPrice}")
                 logging.info(f"[TWSService] Order {custom_uuid} FINALIZED (filled={filled} @ {avgFillPrice})")
-                if getattr(custom_order, "_fill_event", None):
-                    custom_order._fill_event.set()
 
-                pos = self._positions_by_order_id.get(custom_uuid, {
-                    "qty": 0,
-                    "avg_price": 0.0,
-                    "symbol": custom_order.symbol,
-                    "expiry": custom_order.expiry,
-                    "strike": custom_order.strike,
-                    "right": custom_order.right,
-                })
-                pos["qty"] = int(filled or 0)
-                pos["avg_price"] = float(avgFillPrice or pos.get("avg_price", 0.0))
-                self._positions_by_order_id[custom_uuid] = pos
+                # ✅ Save live BUY position correctly for StopLoss reference
+                if custom_order.action.upper() == "BUY":
+                    pos = {
+                        "uuid": custom_order.order_id,          # use the same UUID StopLoss will reference
+                        "symbol": custom_order.symbol,
+                        "expiry": custom_order.expiry,
+                        "strike": custom_order.strike,
+                        "right": custom_order.right,
+                        "qty": int(filled or 0),
+                        "avg_price": float(avgFillPrice or 0.0),
+                        "ib_id": orderId,
+                    }
+                    self._positions_by_order_id[custom_order.order_id] = pos
+                    logging.info(f"[TWSService] Saved BUY position {custom_order.symbol} ({custom_order.order_id}) qty={filled} @ {avgFillPrice}")
 
-                # 🩵 NEW: Mirror to symbol index for StopLoss lookups
-                if not hasattr(self, "_positions_by_symbol"):
-                    self._positions_by_symbol = {}
-                self._positions_by_symbol[custom_order.symbol] = custom_uuid
 
             elif status_str in ("cancelled", "apicancelled"):
                 custom_order.mark_cancelled()
