@@ -152,47 +152,70 @@ class TWSService(EWrapper, EClient):
         else:
             logging.error(f"API Error. reqId: {reqId}, Code: {actual_error_code}, Msg: {errorString}")
 
-    def orderStatus(self, orderId, status, filled, remaining, avgFillPrice, permId, parentId, lastFillPrice, clientId, whyHeld, mktCapPrice):
-        """Update custom order status based on IB callbacks"""
-        logging.info(f"Order status - ID: {orderId}, Status: {status}, Filled: {filled}")
-        
-        # Find and update the corresponding custom order
-        for custom_order_id, custom_order in self._pending_orders.items():
-            if hasattr(custom_order, '_ib_order_id') and custom_order._ib_order_id == orderId:
-                if status == "Filled":
-                    custom_order.mark_active(result=orderId)
-                    logging.info(f"Custom order {custom_order_id} filled")
-                elif status in ["Cancelled", "ApiCancelled"]:
-                    custom_order.mark_cancelled()
-                    logging.info(f"Custom order {custom_order_id} cancelled")
-        
+    def orderStatus(
+    self, orderId, status, filled, remaining, avgFillPrice,
+    permId, parentId, lastFillPrice, clientId, whyHeld, mktCapPrice
+):
+        """Update custom order status and maintain live fill tracking"""
+        logging.info(f"[TWSService] Order status: ID={orderId}, status={status}, filled={filled}, avgFill={avgFillPrice}")
 
         try:
-        # map IB numeric id → our UUID order_id
-            order_uuid = self._ib_to_order_id.get(orderId)
-            if order_uuid:
-                pos = self._positions_by_order_id.get(order_uuid)
-                if not pos:
-                    # initialize position entry if this is the first time we see it
-                    base = self._pending_orders.get(order_uuid)
-                    if base:
-                        pos = {
-                            "qty": 0,
-                            "avg_price": 0.0,
-                            "symbol": base.symbol,
-                            "expiry": base.expiry,
-                            "strike": base.strike,
-                            "right": base.right,
-                        }
-                if pos:
-                    pos["qty"] = int(filled or 0)
-                    pos["avg_price"] = float(avgFillPrice or pos.get("avg_price", 0.0))
+            status_str = (status or "").strip().lower()
+            custom_uuid = self._ib_to_order_id.get(orderId)
+            custom_order = self._pending_orders.get(custom_uuid)
 
-                    #pos["qty"] = filled
-                    #pos["avg_price"] = avgFillPrice
-                    self._positions_by_order_id[order_uuid] = pos
+            if not custom_order:
+                logging.debug(f"[TWSService] Untracked IB order {orderId} (status={status})")
+                return
+
+            # --- Handle status transitions ---
+            if status_str in ("submitted", "presubmitted"):
+                # Mark active once order leaves local queue
+                custom_order.mark_active(result=f"Submitted → IBID {orderId}")
+                logging.info(f"[TWSService] Order {custom_uuid} now ACTIVE on IB")
+
+            elif status_str == "filled":
+                # ✅ Proper fill handling
+                custom_order.mark_finalized(result=f"Filled {filled} @ {avgFillPrice}")
+                logging.info(f"[TWSService] Order {custom_uuid} FINALIZED (filled={filled} @ {avgFillPrice})")
+                if getattr(custom_order, "_fill_event", None):
+                    custom_order._fill_event.set()
+
+                # Maintain live position snapshot
+                pos = self._positions_by_order_id.get(custom_uuid, {
+                    "qty": 0,
+                    "avg_price": 0.0,
+                    "symbol": custom_order.symbol,
+                    "expiry": custom_order.expiry,
+                    "strike": custom_order.strike,
+                    "right": custom_order.right,
+                })
+                pos["qty"] = int(filled or 0)
+                pos["avg_price"] = float(avgFillPrice or pos.get("avg_price", 0.0))
+                self._positions_by_order_id[custom_uuid] = pos
+
+            elif status_str in ("cancelled", "apicancelled"):
+                custom_order.mark_cancelled()
+                logging.info(f"[TWSService] Order {custom_uuid} CANCELLED on IB")
+
+            elif status_str in ("inactive", "pendingcancel"):
+                custom_order.mark_failed(reason=f"Inactive or pending cancel (status={status})")
+
+            # --- Always mirror to tracking maps ---
+            if custom_uuid not in self._ib_to_order_id.values():
+                self._ib_to_order_id[orderId] = custom_uuid
+            if custom_uuid not in self._pending_orders:
+                self._pending_orders[custom_uuid] = custom_order
+
+            # --- Update position map regardless of fill ---
+            pos = self._positions_by_order_id.get(custom_uuid)
+            if pos:
+                pos["qty"] = int(filled or pos.get("qty", 0))
+                pos["avg_price"] = float(avgFillPrice or pos.get("avg_price", 0.0))
+                self._positions_by_order_id[custom_uuid] = pos
+
         except Exception as e:
-            logging.error(f"[TWSService] position-tracking hook failed for order {orderId}: {e}")
+            logging.error(f"[TWSService] orderStatus() failed for {orderId}: {e}")
 
     def openOrder(self, orderId, contract, order: IBOrder, orderState):
         logging.info(f"Order opened - ID: {orderId}, Symbol: {contract.symbol}")

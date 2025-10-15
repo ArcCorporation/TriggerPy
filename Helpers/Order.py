@@ -1,3 +1,4 @@
+import threading
 from typing import Optional
 import uuid
 import enum
@@ -53,6 +54,7 @@ class Order:
         self.trigger = trigger  # float ya da None
         self._ib_order_id = 0
         self.state = OrderState.PENDING if trigger else OrderState.ACTIVE
+        self._fill_event = threading.Event()
         self.result = None  # finalize edildiğinde TWS’ten dönen order id seti
 
     # ----------------------------------------------------------------------

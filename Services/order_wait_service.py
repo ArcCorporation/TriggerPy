@@ -332,33 +332,37 @@ class OrderWaitService:
                         order._status_callback(f"Finalized: {order.symbol} {order.order_id}", "green")
                     except Exception as e:
                         logging.error(f"[WaitService] UI callback failed for finalized order {order.order_id}: {e}")
-                order_manager.add_finalized_order(order_id, order)
-                order.mark_finalized(result=f"IB Order ID: {order._ib_order_id}")
-                msg = f"[WaitService] Order finalized {order_id} → IB ID: {order._ib_order_id}"
-                logging.info(msg)
-                watcher_info.update_watcher(order_id, STATUS_FINALIZED)
                 
+                if getattr(order, "_fill_event", None):
+                    filled = order._fill_event.wait(timeout=15.0)
+                    if filled and order.state == OrderState.FINALIZED:
+                        order_manager.add_finalized_order(order_id, order)
+                        msg = f"[WaitService] Order finalized {order_id} → IB ID: {order._ib_order_id}"
+                        logging.info(msg)
+                        watcher_info.update_watcher(order_id, STATUS_FINALIZED)
+                    else:
+                        logging.warning(f"[WaitService] Order {order_id} not filled within timeout window.")
 
                 # ✅ if stop-loss configured, launch stop-loss watcher
-                if order.trigger and order.sl_price:
-                    stop_loss_level = order.trigger - order.sl_price if order.right == 'C' or order.right == "CALL" else order.trigger + order.sl_price
-                    exit_order = Order(
-                        symbol=order.symbol,
-                        expiry=order.expiry,
-                        strike=order.strike,
-                        right=order.right,
-                        qty=order.qty,
-                        entry_price=order.entry_price,   # keeps breakeven reference
-                        tp_price=None,
-                        sl_price=order.sl_price,
-                        action="SELL",
-                        trigger=None
-                    )
-                    ex_order = exit_order.set_position_size(order._position_size) 
-                    ex_order.mark_active()
-                    logging.info(f"[WAITSERVICE] Spawned exit order {ex_order.order_id} "
-                            f"stop={stop_loss_level} ({order.right})")
-                    self.start_stop_loss_watcher(ex_order, stop_loss_level)
+                    if order.trigger and order.sl_price and order.state == OrderState.FINALIZED:
+                        stop_loss_level = order.trigger - order.sl_price if order.right == 'C' or order.right == "CALL" else order.trigger + order.sl_price
+                        exit_order = Order(
+                            symbol=order.symbol,
+                            expiry=order.expiry,
+                            strike=order.strike,
+                            right=order.right,
+                            qty=order.qty,
+                            entry_price=order.entry_price,   # keeps breakeven reference
+                            tp_price=None,
+                            sl_price=order.sl_price,
+                            action="SELL",
+                            trigger=None
+                        )
+                        ex_order = exit_order.set_position_size(order._position_size) 
+                        ex_order.mark_active()
+                        logging.info(f"[WAITSERVICE] Spawned exit order {ex_order.order_id} "
+                                f"stop={stop_loss_level} ({order.right})")
+                        self.start_stop_loss_watcher(ex_order, stop_loss_level)
 
             else:
                 order.mark_failed("Failed to place order with TWS")
