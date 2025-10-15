@@ -529,25 +529,38 @@ class TWSService(EWrapper, EClient):
                 currency="USD"
             )
 
-            # ✅ RESOLVE CONTRACT FIRST to avoid error 200
+            # ✅ Resolve contract to avoid error 200
             conid = self.resolve_conid(contract)
             if not conid:
                 logging.error(f"Could not resolve contract for {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right}")
                 custom_order.mark_failed("Contract resolution failed")
                 return False
 
-            # Use resolved contract
             contract.conId = conid
 
-            premium = self.get_option_premium(custom_order.symbol,custom_order.expiry,custom_order.strike, ib_right)
+            # --- Premium snapshot ---
+            premium = self.get_option_premium(custom_order.symbol, custom_order.expiry, custom_order.strike, ib_right)
             if not premium or premium <= 0:
                 raise RuntimeError(f"No live premium for {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right}")
-            
+
             base_price = custom_order.entry_price or premium
-            qty = custom_order.calc_contracts_from_premium(base_price)
+
+            # ✅ FIXED QTY CALC
+            if getattr(custom_order, "_position_size", None):
+                qty = custom_order.calc_contracts_from_premium(base_price)
+            else:
+                # fallback to manually set qty (legacy behavior)
+                qty = custom_order.qty if getattr(custom_order, "qty", None) else 1
 
             custom_order.qty = qty
-            # Convert your custom order to IB order
+
+            # Debug info
+            logging.info(
+                f"[TWSService] Calculated qty={qty} for {custom_order.symbol} "
+                f"premium={premium}, position_size={getattr(custom_order, '_position_size', None)}"
+            )
+
+            # --- Build IB order ---
             closing = custom_order.action == "SELL"
             ib_order = custom_order.to_ib_order(
                 order_type="LMT",
@@ -555,37 +568,34 @@ class TWSService(EWrapper, EClient):
                 transmit=True,
                 closing=closing
             )
-            order = custom_order
             ib_order.account = account
-            ib_order_id = self.next_valid_order_id
-            order._ib_order_id = ib_order_id
-            self._ib_to_order_id[ib_order_id] = order.order_id
 
-            self._positions_by_order_id[order.order_id] = {
+            ib_order_id = self.next_valid_order_id
+            custom_order._ib_order_id = ib_order_id
+            self._ib_to_order_id[ib_order_id] = custom_order.order_id
+
+            self._positions_by_order_id[custom_order.order_id] = {
                 "qty": 0,
                 "avg_price": 0.0,
-                "symbol": order.symbol,
-                "expiry": order.expiry,
-                "strike": order.strike,
-                "right": order.right,
-}
-            # Store the custom order for tracking
+                "symbol": custom_order.symbol,
+                "expiry": custom_order.expiry,
+                "strike": custom_order.strike,
+                "right": custom_order.right,
+            }
+
             self._pending_orders[custom_order.order_id] = custom_order
-            
-            # Place the order with IB
-            order_id = self.next_valid_order_id
-            custom_order._ib_order_id = order_id
-            
-            self.placeOrder(order_id, contract, ib_order)
+
+            self.placeOrder(ib_order_id, contract, ib_order)
             custom_order._placed_ts = time.time() * 1000
-            logging.info(f"[TWSService] Sent order {custom_order.symbol} "
-                        f"IBID={order_id} at {custom_order._placed_ts:.0f} ms")
-            logging.info(f"Placed custom order: {custom_order.order_id} -> IB ID: {order_id}")
-            
+
+            logging.info(f"[TWSService] Sent order {custom_order.symbol} IBID={ib_order_id} "
+                        f"at {custom_order._placed_ts:.0f} ms")
+            logging.info(f"Placed custom order: {custom_order.order_id} -> IB ID: {ib_order_id}")
+
             # Increment order ID for next use
             self.next_valid_order_id += 1
             return True
-            
+
         except Exception as e:
             logging.error(f"Failed to place custom order {custom_order.order_id}: {str(e)}")
             custom_order.mark_failed(reason=str(e))
