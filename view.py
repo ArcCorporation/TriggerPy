@@ -245,6 +245,12 @@ class OrderFrame(tk.Frame):
                             state="disabled")
             btn.pack(side="left", padx=3)
             self.tp_buttons.append(btn)
+
+        # --- Aggressive mode checkbox ---
+        self.var_aggressive = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            frame_ctrl, text="Aggressive", variable=self.var_aggressive
+        ).pack(side="left")
         self.btn_save = ttk.Button(frame_ctrl, text="Place Order", command=self.place_order, state="disabled")
         self.btn_save.pack(side="left", padx=5)
         ttk.Button(frame_ctrl, text="Cancel Order", command=self.cancel_order).pack(side="left", padx=5)
@@ -414,10 +420,11 @@ class OrderFrame(tk.Frame):
                     self.model._stop_loss = sl
                 if tp is not None:
                     self.model._take_profit = tp
-
+                arcTick = 1.10 if self.var_aggressive.get() else 1.06
                 order_data = self.model.place_option_order(
                     action="BUY", quantity=quantity, trigger_price=trigger,
-                    position=position_size
+                    position=position_size,
+                    arcTick=arcTick
                 )
                 state = order_data.get("state", "UNKNOWN")
                 msg = f"Order {state}: {order_data.get('order_id')}"

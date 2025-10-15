@@ -359,6 +359,7 @@ class AppModel:
         quantity: int = 1,
         trigger_price: Optional[float] = None,
         status_callback=None,
+        arcTick=1.07
     ) -> Dict:
         """
         Create & transmit an option order.  
@@ -384,7 +385,7 @@ class AppModel:
             logging.error("place_option_order: TWS snapshot time-out – cannot set TP/SL")
             raise RuntimeError("No option premium available from TWS snapshot")
 
-        mid_premium = snapshot["ask"] * 1.10
+        mid_premium = snapshot["ask"] * arcTick
 
         if mid_premium < 3:
             tick = 0.01
