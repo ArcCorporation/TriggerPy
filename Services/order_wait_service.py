@@ -340,7 +340,7 @@ class OrderWaitService:
                         logging.error(f"[WaitService] UI callback failed for finalized order {order.order_id}: {e}")
                 
                 if getattr(order, "_fill_event", None):
-                    filled = order._fill_event.wait(timeout=15.0)
+                    filled = order._fill_event.wait(timeout=60)
                     if filled and order.state == OrderState.FINALIZED:
                         order_manager.add_finalized_order(order_id, order)
                         msg = f"[WaitService] Order finalized {order_id} → IB ID: {order._ib_order_id}"
