@@ -43,6 +43,10 @@ class TWSService(EWrapper, EClient):
         self._last_print = 0
         self._positions_by_order_id: dict[str, dict] = {}
         self._ib_to_order_id: dict[int, str] = {}
+    
+    def disconnect(self,traceback):
+        logging.warning(f"[TWSService] disconnect() called by {traceback.format_stack(limit=2)[0].strip()}")
+
 
     def conn_status(self) -> bool:
         """
