@@ -9,12 +9,22 @@ from Services.order_manager import order_manager
 from model import general_app
 from view import Banner, OrderFrame
 from Services.watcher_info import watcher_info
-import os
+import os, sys
 import threading
 from datetime import datetime, timedelta
 from Services.runtime_manager import runtime_man
 
 AUTO_SAVE_INTERVAL_MIN = 5
+
+
+
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
 
 def setup_logging():
     log_dir = Path("logs"); log_dir.mkdir(exist_ok=True)
@@ -39,7 +49,7 @@ class ArcTriggerApp(tk.Tk):
         super().__init__()
         self.title("ArcTriggerPy")
         self.configure(bg="black")
-        self.iconbitmap("icon.ico")
+        self.iconbitmap(resource_path("icon.ico"))
         # ---------- Banner ----------
         self.banner = Banner(self)
         self.banner.pack(fill="x")
