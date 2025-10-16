@@ -252,24 +252,57 @@ class TWSService(EWrapper, EClient):
 
 
 
-    def securityDefinitionOptionParameter(self, reqId: int, exchange: str,
-                                        underlyingConId: int, tradingClass: str,
-                                        multiplier: str, expirations: List[str],
-                                        strikes: List[float]):
-        """Callback for option chain data"""
-        logging.info(f"Option chain data: {len(expirations)} expirations, {len(strikes)} strikes")
-        self._maturities_data[reqId] = {
-            'exchange': exchange,
-            'underlyingConId': underlyingConId,
-            'tradingClass': tradingClass,
-            'multiplier': multiplier,
-            'expirations': expirations,
-            'strikes': strikes
-        }
-        self._maturities_event.set()
+    def securityDefinitionOptionParameter(
+    self, reqId: int, exchange: str,
+    underlyingConId: int, tradingClass: str,
+    multiplier: str, expirations: List[str],
+    strikes: List[float]
+):
+        """
+        Callback for option chain data.
+        IBKR sends multiple fragments (per exchange). We merge them safely.
+        """
+        # Initialize if not exists
+        if reqId not in self._maturities_data:
+            self._maturities_data[reqId] = {
+                "exchange": exchange,
+                "underlyingConId": underlyingConId,
+                "tradingClass": tradingClass,
+                "multiplier": multiplier,
+                "expirations": set(),
+                "strikes": set(),
+            }
+
+        data = self._maturities_data[reqId]
+        before_e = len(data["expirations"])
+        before_s = len(data["strikes"])
+
+        # Merge instead of replace
+        data["expirations"].update(expirations or [])
+        data["strikes"].update(strikes or [])
+
+        after_e = len(data["expirations"])
+        after_s = len(data["strikes"])
+
+        logging.info(
+            f"[TWSService] Option chain fragment merged for {exchange}: "
+            f"{after_e} expirations (+{after_e - before_e}), {after_s} strikes (+{after_s - before_s})"
+        )
 
     def securityDefinitionOptionParameterEnd(self, reqId: int):
+        """Finalize merged option chain"""
+        if reqId in self._maturities_data:
+            data = self._maturities_data[reqId]
+            expirations = sorted(data["expirations"])
+            strikes = sorted(data["strikes"])
+            self._maturities_data[reqId]["expirations"] = expirations
+            self._maturities_data[reqId]["strikes"] = strikes
+            logging.info(
+                f"[TWSService] Option chain complete: {len(expirations)} expirations, {len(strikes)} strikes"
+            )
         self._maturities_event.set()
+
+
 
     def contractDetails(self, reqId: int, contractDetails):
         self._contract_details[reqId] = contractDetails
