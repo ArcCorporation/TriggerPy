@@ -9,6 +9,8 @@ from Services.watcher_info import (
     STATUS_PENDING, STATUS_RUNNING, STATUS_FINALIZED, STATUS_CANCELLED, STATUS_FAILED
 )
 from Services.runtime_manager import runtime_man
+from Services.tws_service import create_tws_service
+from Services.polygon_service import polygon_service
 
 
 class OrderWaitService:
@@ -406,3 +408,7 @@ class OrderWaitService:
             if status:
                 result['active'][order_id] = status
         return result
+    
+
+
+wait_service = OrderWaitService(polygon_service, create_tws_service())

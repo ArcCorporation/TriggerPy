@@ -4,7 +4,8 @@ import uuid
 from Services.price_watcher import PriceWatcher
 from Services.tws_service import create_tws_service
 from Services.polygon_service import polygon_service
-from Services.order_wait_service import OrderWaitService
+from Services.order_wait_service import wait_service
+from Services.order_manager import order_manager
 from Helpers.Order import Order, OrderState
 import random
 
@@ -91,15 +92,23 @@ class GeneralApp:
 
         # Reattach pending orders (safe)
         for model in self._models:
-            if model.order and model.order.state == OrderState.PENDING:
+            if model.order and (model.order.state in (OrderState.PENDING, OrderState.ACTIVE)):
                 try:
                     self._order_wait.add_order(model.order, mode="poll")
                     logging.info(f"[GeneralApp.load()] Reattached pending order {model.order.order_id}")
                 except Exception as e:
                     logging.error(f"[GeneralApp.load()] Failed to reattach order: {e}")
+            elif model.order and model.order.state == OrderState.FINALIZED:
+                order_manager.add_finalized_order(model.order)
+                logging.info(f"[GeneralApp.load()] Reattached finalized order {model.order.order_id}")
+
 
     def add_model(self, model: "AppModel"):
         self._models.add(model)
+
+
+    def add_order(self, order):
+        self.order_wait.add_order(order, mode="poll")
 
     def get_models(self):
         return list(self._models)
@@ -144,7 +153,7 @@ class GeneralApp:
         try:
             self._tws = create_tws_service()
             self._polygon = polygon_service
-            self._order_wait = OrderWaitService(self._polygon, self._tws)
+            self._order_wait = wait_service
             if self._tws.connect_and_start():
                 self._connected = True
                 logging.info("GeneralApp: Services connected")
@@ -435,7 +444,8 @@ class AppModel:
                 order.mark_failed("Failed to place order")
                 logging.error(f"AppModel[{self._symbol}]: Order failed {order.order_id}")
         else:
-            general_app.order_wait.add_order(order, mode="poll")
+            #general_app.order_wait.add_order(order, mode="poll")
+            general_app.add_order(order)
             logging.info(
                 f"AppModel[{self._symbol}]: Order waiting breakout {order.order_id}"
             )
