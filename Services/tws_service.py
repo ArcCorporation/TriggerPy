@@ -44,10 +44,7 @@ class TWSService(EWrapper, EClient):
         self._positions_by_order_id: dict[str, dict] = {}
         self._ib_to_order_id: dict[int, str] = {}
     
-    def disconnect(self,traceback):
-        logging.warning(f"[TWSService] disconnect() called by {traceback.format_stack(limit=2)[0].strip()}")
-
-
+    
     def conn_status(self) -> bool:
         """
         Returns True if currently connected to TWS and next_valid_order_id has been set.
@@ -63,6 +60,8 @@ class TWSService(EWrapper, EClient):
                 self._last_print = now
         return is_alive
 
+    def disconnect(self,traceback):
+        logging.warning(f"[TWSService] disconnect() called by {traceback.format_stack(limit=2)[0].strip()}")
 
     def reconnect(self, host: str = "127.0.0.1", port: int = 7497, timeout: int = 10) -> bool:
         """
