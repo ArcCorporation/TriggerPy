@@ -366,11 +366,11 @@ class OrderWaitService:
                         )
                         ex_order = exit_order.set_position_size(order._position_size) 
                         ex_order.mark_active()
-                        #logging.info(f"[WAITSERVICE] Spawned exit order {ex_order.order_id} "
-                        #        f"stop={stop_loss_level} ({order.right})")
+                        logging.info(f"[WAITSERVICE] Spawned exit order {ex_order.order_id} "
+                                f"stop={stop_loss_level} ({order.right})")
                         ex_order.previous_id = order.order_id
-                        #self.start_stop_loss_watcher(ex_order, stop_loss_level)
-                        logging.info(f"BEWARE NOT LAUNCHING STOP LOSS")
+                        self.start_stop_loss_watcher(ex_order, stop_loss_level)
+                        #logging.info(f"BEWARE NOT LAUNCHING STOP LOSS")
 
 
             else:
