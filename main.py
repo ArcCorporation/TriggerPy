@@ -14,7 +14,7 @@ import threading
 from datetime import datetime, timedelta
 from Services.runtime_manager import runtime_man
 
-AUTO_SAVE_INTERVAL_MIN = 15
+AUTO_SAVE_INTERVAL_MIN = 5
 
 def setup_logging():
     log_dir = Path("logs"); log_dir.mkdir(exist_ok=True)
@@ -87,38 +87,43 @@ class ArcTriggerApp(tk.Tk):
 
     def save_session(self, filename: str = "arctrigger.dat", background: bool = False):
         """
-        Save all visible order frames and their models/orders to arctrigger.dat.
-        Includes a timestamp header for auto-restore logic.
+        Robust save: writes to temp file then atomically replaces.
+        Includes header marker + frame count.
         """
         try:
+            header = ["#ARCTRIGGER_SESSION_V1"]
+            header.append(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            frame_count = len(self.order_frames)
+            header.append(str(frame_count))
+            logging.info(f"[ArcTriggerApp.save_session] Saving {frame_count} frames...")
+
             lines = []
-            lines.append(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            logging.info(f"save frame count{len(self.order_frames)}")
-            lines.append(str(len(self.order_frames)))
-
             for frame in self.order_frames:
-                serialized = frame.serialize()
-                lines.extend(serialized.split("\n"))
+                try:
+                    serialized = frame.serialize().strip()
+                    if serialized:
+                        lines.append(serialized)
+                except Exception as e:
+                    logging.error(f"[ArcTriggerApp.save_session] Failed to serialize frame: {e}")
 
-            with open(filename, "w", encoding="utf-8") as f:
-                f.write("\n".join(lines))
+            tmpfile = filename + ".tmp"
+            with open(tmpfile, "w", encoding="utf-8") as f:
+                f.write("\n".join(header + lines))
 
-            if not background:
-                logging.info(f"[ArcTriggerApp.save_session] Saved {len(self.order_frames)} frames → {filename}")
-            else:
-                logging.info(f"[ArcTriggerApp.auto_save] Background autosave complete.")
+            os.replace(tmpfile, filename)
+            logging.info(f"[ArcTriggerApp.save_session] ✓ Saved {frame_count} frames → {filename}")
 
         except Exception as e:
-            logging.error(f"[ArcTriggerApp.save_session] Failed to save session: {e}")
+            logging.error(f"[ArcTriggerApp.save_session] ❌ Save failed: {e}")
 
     
     def load_session(self, filename: str = "arctrigger.dat", auto=False):
         """
-        Load frames and their models/orders from arctrigger.dat.
-        If auto=True, only loads if file timestamp <= 15 minutes old.
+        Robust load with version + timestamp check.
+        Restores partial frames safely if one fails.
         """
         if not os.path.exists(filename):
-            logging.info(f"[ArcTriggerApp.load_session] No session file found.")
+            logging.info("[ArcTriggerApp.load_session] No session file found.")
             return False
 
         try:
@@ -128,52 +133,42 @@ class ArcTriggerApp(tk.Tk):
             logging.error(f"[ArcTriggerApp.load_session] Failed to read {filename}: {e}")
             return False
 
-        if len(lines) < 2:
-            logging.warning("[ArcTriggerApp.load_session] File incomplete.")
+        if len(lines) < 3 or not lines[0].startswith("#ARCTRIGGER_SESSION_"):
+            logging.warning(f"[ArcTriggerApp.load_session] File incomplete or invalid header ({len(lines)} lines).")
             return False
-
-        # Check timestamp
-        try:
-            timestamp = datetime.strptime(lines[0], "%Y-%m-%d %H:%M:%S")
-        except Exception:
-            logging.warning("[ArcTriggerApp.load_session] Invalid timestamp header.")
-            return False
-
-        if auto:
-            if datetime.now() - timestamp > timedelta(minutes=15):
-                logging.info("[ArcTriggerApp.load_session] Last session older than 15 minutes, skipping auto-restore.")
-                return False
 
         try:
-            count = int(lines[1])
-        except ValueError:
-            logging.error("[ArcTriggerApp.load_session] Invalid frame count header.")
+            timestamp = datetime.strptime(lines[1], "%Y-%m-%d %H:%M:%S")
+            count = int(lines[2])
+        except Exception as e:
+            logging.error(f"[ArcTriggerApp.load_session] Invalid header: {e}")
             return False
 
-        # Clear current frames
+        if auto and datetime.now() - timestamp > timedelta(minutes=15):
+            logging.info("[ArcTriggerApp.load_session] Last session too old, skipping auto-restore.")
+            return False
+
+        # wipe current frames
         for frame in self.order_frames:
             frame.destroy()
         self.order_frames.clear()
 
-        idx = 2
-        loaded = 0
-        while idx < len(lines):
-            if not lines[idx].startswith("<Frame>|"):
-                idx += 1
+        restored = 0
+        for i, block in enumerate(lines[3:], start=1):
+            if not block.startswith("<Frame>|"):
                 continue
             try:
-                frame, consumed = OrderFrame.deserialize(lines[idx:], parent=self.order_container)
+                frame, _ = OrderFrame.deserialize([block], parent=self.order_container)
                 frame.pack(fill="x", pady=10, padx=10)
                 self.order_frames.append(frame)
-                loaded += 1
-                idx += consumed
+                restored += 1
             except Exception as e:
-                logging.error(f"[ArcTriggerApp.load_session] Error loading frame at line {idx}: {e}")
-                idx += 1
+                logging.error(f"[ArcTriggerApp.load_session] Frame {i} failed: {e}")
 
-        logging.info(f"[ArcTriggerApp.load_session] Restored {loaded}/{count} frames.")
-        return True
-    
+        logging.info(f"[ArcTriggerApp.load_session] Restored {restored}/{count} frames.")
+        return restored > 0
+
+
     def start_auto_save_thread(self):
         """
         Background thread that saves the session every 15 minutes.
