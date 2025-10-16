@@ -192,6 +192,18 @@ class TWSService(EWrapper, EClient):
                     }
                     self._positions_by_order_id[custom_order.order_id] = pos
                     logging.info(f"[TWSService] Saved BUY position {custom_order.symbol} ({custom_order.order_id}) qty={filled} @ {avgFillPrice}")
+                # --- 🔧 Handle SELL fills (close or reduce existing position) ---
+                if custom_order.action.upper() == "SELL":
+                    target_uuid = self._ib_to_order_id.get(orderId)
+                    if target_uuid and target_uuid in self._positions_by_order_id:
+                        pos = self._positions_by_order_id[target_uuid]
+                        old_qty = pos["qty"]
+                        pos["qty"] = max(0, old_qty - int(filled or 0))
+                        self._positions_by_order_id[target_uuid] = pos
+                        logging.info(f"[TWSService] SELL fill updated {target_uuid}: qty {old_qty} → {pos['qty']}")
+                        if pos["qty"] == 0:
+                            self._positions_by_order_id.pop(target_uuid, None)
+                            logging.info(f"[TWSService] Position closed for {target_uuid}")
 
 
             elif status_str in ("cancelled", "apicancelled"):
@@ -227,7 +239,13 @@ class TWSService(EWrapper, EClient):
 
         pos = self._positions_by_order_id.get(order_id)
         if not pos:
+            # 🔧 If not found, check if SELL execution maps to a BUY UUID
+            target_uuid = self._ib_to_order_id.get(execution.orderId)
+            if target_uuid:
+                pos = self._positions_by_order_id.get(target_uuid)
+        if not pos:
             return
+
 
         side = (execution.side or "").upper()   # BOT or SLD
         old_qty = int(pos["qty"])
@@ -710,6 +728,15 @@ class TWSService(EWrapper, EClient):
             order_id = self.next_valid_order_id
             custom_order._ib_order_id = order_id
             self._pending_orders[custom_order.order_id] = custom_order
+            # --- 🔧 Link SELL order to existing BUY position if available ---
+            for uuid, pos in self._positions_by_order_id.items():
+                if (pos["symbol"] == custom_order.symbol and
+                    pos["expiry"] == custom_order.expiry and
+                    pos["strike"] == custom_order.strike and
+                    pos["right"] == custom_order.right):
+                    self._ib_to_order_id[order_id] = uuid
+                    logging.info(f"[TWSService] Linked SELL {order_id} to existing BUY position {uuid}")
+                    break
 
             self.placeOrder(order_id, contract, ib_order)
             custom_order._placed_ts = time.time() * 1000
@@ -765,10 +792,9 @@ class TWSService(EWrapper, EClient):
 
         ok = self.sell_custom_order(sell_order, account=account)
         if ok:
-            pos["qty"] -= sell_qty
-            if pos["qty"] <= 0:
-                self._positions_by_order_id.pop(order_id, None)
-                logging.info(f"[TWSService] Position closed for {order_id}")
+            logging.info(f"[TWSService] SELL order submitted for {order_id}, waiting for fill confirmation.")
+            # 🔧 Do NOT modify qty here; handled in orderStatus/execDetails
+
         return ok
 
     def get_option_premium(self,
