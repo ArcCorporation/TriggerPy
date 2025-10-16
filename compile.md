@@ -1,1 +1,1 @@
-pyinstaller --onefile --noconfirm --clean --name ArcUltraTrigger00 main.py
+pyinstaller --onefile --noconfirm --clean --noconsole --name ArcUltraTrigger00 --icon=icon.ico main.py
