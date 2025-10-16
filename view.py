@@ -573,18 +573,32 @@ class OrderFrame(tk.Frame):
             elif p.startswith("symbol="):
                 symbol = p.split("=", 1)[1]
 
+        # --- Instantiate frame ---
         frame = cls(parent)
         frame.frame_id = frame_id
         frame._view_state = state
-        frame.symbol_var.set("" if symbol == "None" else symbol)
+
+        # --- Restore symbol correctly ---
+        try:
+            if symbol and symbol != "None":
+                # Set symbol in combobox instead of non-existent symbol_var
+                frame.symbol_selector.combo_symbol.set(symbol)
+                # Optionally rebuild the model so buttons etc. get enabled
+                frame.on_symbol_selected(symbol)
+                logging.info(f"[OrderFrame.deserialize] Restored symbol {symbol}")
+        except Exception as e:
+            logging.error(f"[OrderFrame.deserialize] Symbol restore failed: {e}")
 
         consumed = 1
 
-        # --- Parse AppModel if present ---
+        # --- Parse attached model if present ---
         if len(lines) > 1 and lines[1].startswith("AppModel:"):
-            model, used = AppModel.deserialize(lines[1:3])
-            frame.model = model
-            consumed += used
+            try:
+                model, used = AppModel.deserialize(lines[1:3])
+                frame.model = model
+                consumed += used
+            except Exception as e:
+                logging.error(f"[OrderFrame.deserialize] Model restore failed: {e}")
 
         return frame, consumed
 
