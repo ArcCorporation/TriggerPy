@@ -39,7 +39,7 @@ class ArcTriggerApp(tk.Tk):
         super().__init__()
         self.title("ArcTriggerPy")
         self.configure(bg="black")
-
+        self.iconbitmap("icon.ico")
         # ---------- Banner ----------
         self.banner = Banner(self)
         self.banner.pack(fill="x")
