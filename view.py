@@ -248,7 +248,7 @@ class OrderFrame(tk.Frame):
 
         # --- Offset row  (was aggressive checkbox) -------------------------
         offset_frame = ttk.Frame(self)
-        offset_frame.grid(row=4, column=0, columnspan=9, pady=8)
+        offset_frame.grid(row=5, column=0, columnspan=9, pady=8)
 
         ttk.Label(offset_frame, text="Offset").pack(side="left", padx=(0, 4))
         self.entry_offset = ttk.Entry(offset_frame, width=6)
@@ -268,7 +268,7 @@ class OrderFrame(tk.Frame):
 
         # --- Status ---
         self.lbl_status = ttk.Label(self, text="Select symbol to start", foreground="gray")
-        self.lbl_status.grid(row=5, column=0, columnspan=9, pady=5)
+        self.lbl_status.grid(row=7, column=0, columnspan=9, pady=5)
 
     # ---------- helpers ----------
     def _set_offset(self, value: float):
