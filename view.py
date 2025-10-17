@@ -203,6 +203,9 @@ class OrderFrame(tk.Frame):
         self.combo_maturity = ttk.Combobox(self, width=10, state="readonly")
         self.combo_maturity.grid(row=2, column=3, padx=5)
         self.combo_maturity.bind("<<ComboboxSelected>>", self.on_maturity_selected)
+        ttk.Label(self, text="Strike").grid(row=2, column=4)
+        self.combo_strike = ttk.Combobox(self, width=8, state="disabled")
+        self.combo_strike.grid(row=2, column=5, padx=5)
 
         # --- Qty + SL + TP ---
         ttk.Label(self, text="Qty").grid(row=3, column=2)
@@ -271,6 +274,16 @@ class OrderFrame(tk.Frame):
         self.lbl_status.grid(row=7, column=0, columnspan=9, pady=5)
 
     # ---------- helpers ----------
+
+    def _populate_strike_combo(self, centre: float):
+        low  = int((centre - 50) // 5 * 5)
+        high = int((centre + 50) // 5 * 5) + 1
+        strikes = [str(v) for v in range(low, high + 1, 5)]
+        self.combo_strike["values"] = strikes
+        best = min(strikes, key=lambda s: abs(float(s) - centre))
+        self.combo_strike.set(best)
+        self.combo_strike.config(state="readonly")
+
     def _set_offset(self, value: float):
         """Slam the offset entry with the pressed button's value."""
         self.entry_offset.delete(0, tk.END)
@@ -349,8 +362,11 @@ class OrderFrame(tk.Frame):
             def apply():
                 if token != self._symbol_token:
                     return
+                
                 if price:
+                    self._populate_strike_combo(price) 
                     # trigger
+
                     trigger_price = price + 0.10 if self.var_type.get() == "CALL" else price - 0.10
                     self.entry_trigger.delete(0, tk.END)
                     self.entry_trigger.insert(0, f"{trigger_price:.2f}")
@@ -425,10 +441,9 @@ class OrderFrame(tk.Frame):
 
         def worker():
             try:
-                strike = round(self.model.refresh_market_price())
-                # yukarıya yuvarla 5'in katına
-                if strike % 5 != 0:
-                    strike += (5 - (strike % 5))
+                strike = float(self.combo_strike.get())
+                
+                
                 self.model.set_option_contract(maturity, strike, right)
                 if sl is not None:
                     self.model._stop_loss = sl
