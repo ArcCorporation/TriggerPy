@@ -246,11 +246,21 @@ class OrderFrame(tk.Frame):
             btn.pack(side="left", padx=3)
             self.tp_buttons.append(btn)
 
-        # --- Aggressive mode checkbox ---
-        self.var_aggressive = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            frame_ctrl, text="Aggressive", variable=self.var_aggressive
-        ).pack(side="left")
+        # --- Offset row  (was aggressive checkbox) -------------------------
+        offset_frame = ttk.Frame(self)
+        offset_frame.grid(row=4, column=0, columnspan=9, pady=8)
+
+        ttk.Label(offset_frame, text="Offset").pack(side="left", padx=(0, 4))
+        self.entry_offset = ttk.Entry(offset_frame, width=6)
+        self.entry_offset.pack(side="left")
+        self.entry_offset.insert(0, "1.06")          # sane default
+
+        for val in (1.05, 1.10, 1.15):
+            ttk.Button(
+                offset_frame, text=f"{val:.2f}",
+                command=lambda v=val: self._set_offset(v),
+                width=4
+            ).pack(side="left", padx=2)
         self.btn_save = ttk.Button(frame_ctrl, text="Place Order", command=self.place_order, state="disabled")
         self.btn_save.pack(side="left", padx=5)
         ttk.Button(frame_ctrl, text="Cancel Order", command=self.cancel_order).pack(side="left", padx=5)
@@ -261,6 +271,10 @@ class OrderFrame(tk.Frame):
         self.lbl_status.grid(row=5, column=0, columnspan=9, pady=5)
 
     # ---------- helpers ----------
+    def _set_offset(self, value: float):
+        """Slam the offset entry with the pressed button's value."""
+        self.entry_offset.delete(0, tk.END)
+        self.entry_offset.insert(0, f"{value:.2f}")
     # ---------- helper ----------
     def _bump_trigger(self, delta: float):
         try:
@@ -420,7 +434,11 @@ class OrderFrame(tk.Frame):
                     self.model._stop_loss = sl
                 if tp is not None:
                     self.model._take_profit = tp
-                arcTick = 1.10 if self.var_aggressive.get() else 1.06
+                # new
+                try:
+                    arcTick = float(self.entry_offset.get() or 1.06)
+                except ValueError:
+                    arcTick = 1.06
                 order_data = self.model.place_option_order(
                     action="BUY", quantity=quantity, trigger_price=trigger,
                     position=position_size,
