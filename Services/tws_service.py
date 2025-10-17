@@ -9,7 +9,7 @@ import logging
 import random
 from typing import List, Dict, Optional
 from Helpers.Order import Order
-
+import traceback
 # Configure logging
 
 
@@ -60,9 +60,25 @@ class TWSService(EWrapper, EClient):
                 self._last_print = now
         return is_alive
 
-    def disconnect(self,traceback):
-        logging.warning(f"[TWSService] disconnect() called by {traceback.format_stack(limit=2)[0].strip()}")
+    def disconnect(self) -> None:
+        """
+        Wrap the real disconnect() so we can log WHO/WHERE called it,
+        then delegate to the genuine EClient implementation.
+        """
+        # Build a short human-readable caller string (last 2 frames)
+        caller = "\n".join(
+            f"  {s}" for s in traceback.format_stack(limit=3)[:-1][-2:]
+        )
+        logging.warning(
+            f"[TWSService] disconnect() invoked — socket will close.\n{caller}"
+        )
 
+        # *** NOW run the real IB code ***
+        super().disconnect()
+
+        # Mark our own state
+        self.connected = False
+        self.connection_ready.clear()
     def reconnect(self, host: str = "127.0.0.1", port: int = 7497, timeout: int = 10) -> bool:
         """
         Attempts to reconnect to TWS/IB Gateway.
@@ -336,6 +352,19 @@ class TWSService(EWrapper, EClient):
         logging.warning("Connection to TWS closed")
         self.connection_ready.clear()
 
+    def _reader_wrapper(self):
+        """Catch everything that kills the reader loop."""
+        try:
+            self.run()                 # real IB loop
+        except Exception as exc:
+            logging.exception("IB reader thread died with exception")
+        finally:
+            logging.warning("IB reader thread ended -> auto-reconnect")
+            self.connected = False
+            self.connection_ready.clear()
+            # optional: schedule reconnect here or raise a flag
+            self.connect_and_start()
+
     def connect_and_start(self, host='127.0.0.1', port=7497, timeout=10):
         """Connect to TWS/IB Gateway"""
         if self.connected:
@@ -345,10 +374,11 @@ class TWSService(EWrapper, EClient):
             self.connect(host, port, self.client_id)
             self.connected = True
             api_thread = threading.Thread(
-                target=self.run, 
-                daemon=True, 
+                target=self._reader_wrapper,          # ← new wrapper
+                daemon=True,
                 name=f"TWS-API-Thread-{self.client_id}"
             )
+            
             api_thread.start()
             
             if self.connection_ready.wait(timeout=timeout):
