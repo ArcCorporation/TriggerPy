@@ -253,9 +253,9 @@ class OrderFrame(tk.Frame):
         ttk.Label(offset_frame, text="Offset").pack(side="left", padx=(0, 4))
         self.entry_offset = ttk.Entry(offset_frame, width=6)
         self.entry_offset.pack(side="left")
-        self.entry_offset.insert(0, "1.06")          # sane default
+        self.entry_offset.insert(0, "0.01")          # sane default
 
-        for val in (1.05, 1.10, 1.15):
+        for val in (0.01, 0.05, 0.15):
             ttk.Button(
                 offset_frame, text=f"{val:.2f}",
                 command=lambda v=val: self._set_offset(v),
