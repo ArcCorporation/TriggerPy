@@ -700,7 +700,7 @@ class TWSService(EWrapper, EClient):
         self.connection_ready.clear()
         self.disconnect()
     
-    def sell_custom_order(self, custom_order, account: str = "") -> bool:
+    def sell_custom_order(self, custom_order: Order, contract : Contract, account: str = "", ) -> bool:
         """
         Dedicated SELL method for option orders.
         - Dynamically recalculates quantity from live premium if position_size is set.
@@ -714,21 +714,9 @@ class TWSService(EWrapper, EClient):
             custom_order.action = "SELL"
 
             ib_right = "C" if custom_order.right.upper() in ["C", "CALL"] else "P"
-            contract = self.create_option_contract(
-                symbol=custom_order.symbol,
-                last_trade_date=custom_order.expiry,
-                strike=custom_order.strike,
-                right=ib_right,
-                exchange="SMART",
-                currency="USD"
-            )
+            
 
-            conid = self.resolve_conid(contract)
-            if not conid:
-                logging.error(f"Could not resolve contract for {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right}")
-                custom_order.mark_failed("Contract resolution failed")
-                return False
-            contract.conId = conid
+            
 
             # ✅ Recalculate quantity based on live premium if _position_size available
             premium = self.get_option_premium(custom_order.symbol, custom_order.expiry, custom_order.strike, ib_right)
@@ -795,7 +783,7 @@ class TWSService(EWrapper, EClient):
         return False
 
 
-    def sell_position_by_order_id(self, order_id: str, qty: int | None = None,
+    def sell_position_by_order_id(self, order_id: str, contract : Contract, qty: int | None = None,
                               limit_price: float | None = None, account: str = "") -> bool:
         pos = self._positions_by_order_id.get(order_id)
         if not pos or pos["qty"] <= 0:
@@ -814,7 +802,7 @@ class TWSService(EWrapper, EClient):
             action="SELL",
         )
 
-        ok = self.sell_custom_order(sell_order, account=account)
+        ok = self.sell_custom_order(sell_order, contract, account=account)
         if ok:
             logging.info(f"[TWSService] SELL order submitted for {order_id}, waiting for fill confirmation.")
             # 🔧 Do NOT modify qty here; handled in orderStatus/execDetails

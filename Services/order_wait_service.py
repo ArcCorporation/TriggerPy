@@ -9,12 +9,12 @@ from Services.watcher_info import (
     STATUS_PENDING, STATUS_RUNNING, STATUS_FINALIZED, STATUS_CANCELLED, STATUS_FAILED
 )
 from Services.runtime_manager import runtime_man
-from Services.tws_service import create_tws_service
-from Services.polygon_service import polygon_service
+from Services.tws_service import create_tws_service, TWSService
+from Services.polygon_service import polygon_service, PolygonService
 
 
 class OrderWaitService:
-    def __init__(self, polygon_service, tws_service, poll_interval=0.1):
+    def __init__(self, polygon_service: PolygonService, tws_service: TWSService, poll_interval=0.1):
         self.polygon = polygon_service
         self.tws = tws_service
 
@@ -148,17 +148,24 @@ class OrderWaitService:
                     else:
                         triggered = last_price <= stop_loss_price   # CALL: fall = loss
                     # --------------------------------
+
+                    # --- pre-resolve contract so every downstream IB call is safe ---
+                    contract = self.tws.create_option_contract(
+                        order.symbol, order.expiry, order.strike, order.right)
+                    conid = self.tws.resolve_conid(contract)
+                    if not conid:
+                        tinfo.update_status(STATUS_FAILED, info={"error":"bad contract"})
+                        return
+                    contract.conId = conid          # stash it for re-use
                     premium = self.tws.get_option_premium(
                         order.symbol, order.expiry, order.strike, order.right
                     )
-                    if premium is None or premium <= 0:          # safety: can't price the option
+                    if premium is None or premium <= 0:
                         pos = self.tws.get_position_by_order_id(order.previous_id)
-                    if pos:
-                        premium = pos["avg_price"]
-                        logging.warning(f"[StopLoss] Using fallback avg_price={premium} for {order.symbol}")
-                    else:
-                        logging.error("[StopLoss] No live premium – aborting exit")
-                        return
+                        premium = pos and pos.get("avg_price") or None
+                        if premium is None:
+                            tinfo.update_status(STATUS_FAILED, info={"error":"no premium"})
+                            return   # kill thread cleanly
 
 
                     if triggered:
@@ -182,8 +189,10 @@ class OrderWaitService:
                             live_qty = int(pos["qty"])
                             success = self.tws.sell_position_by_order_id(
                                 order.order_id,
+                                contract,
                                 qty=live_qty,
                                 limit_price=mid_premium
+
                             )
                             if success:
                                 logging.info(f"[StopLoss] Sold {live_qty} {order.symbol} via TWS position map @ {mid_premium}")
