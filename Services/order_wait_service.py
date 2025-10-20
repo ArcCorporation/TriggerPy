@@ -170,6 +170,7 @@ class OrderWaitService:
 
                     if triggered:
                         try:
+                            logging.info(f"[StopLoss] triggered {order.symbol} {last_price} {stop_loss_price}")
                             snapshot = self.tws.get_option_snapshot(order.symbol, order.expiry, order.strike, order.right)
                             if not snapshot or snapshot.get("ask") is None:
                                 logging.error("[StopLoss] Snapshot timeout – cannot compute premium")
