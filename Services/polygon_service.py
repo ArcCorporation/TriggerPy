@@ -11,7 +11,7 @@ from Services.randomness import  KEY
 class PolygonService:
     def __init__(self):
         # Şifreli API key çözülüyor
-        api_key_enc = "Y+s5w[!V3[K3):c%0wgSl;|Ps;2Av%KL"
+        api_key_enc = "SBb(2-n>X0)nJZ6}+[M3b)A>KV%fY}>K"
         eservis = Enigma3Service()
         self.api_key = eservis.decrypt(KEY, api_key_enc)
 
