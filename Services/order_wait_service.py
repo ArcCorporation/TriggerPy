@@ -188,7 +188,7 @@ class OrderWaitService:
 
                             live_qty = int(pos["qty"])
                             success = self.tws.sell_position_by_order_id(
-                                order.order_id,
+                                order.previous_id,
                                 contract,
                                 qty=live_qty,
                                 limit_price=mid_premium
