@@ -175,6 +175,8 @@ class OrderFrame(tk.Frame):
         self.var_type = tk.StringVar(value="CALL")
         ttk.Radiobutton(self, text="Call", variable=self.var_type, value="CALL").grid(row=1, column=2)
         ttk.Radiobutton(self, text="Put", variable=self.var_type, value="PUT").grid(row=1, column=3)
+        # When CALL/PUT changes, repopulate strikes if price known
+        self.var_type.trace_add("write", self._on_type_changed)
 
         # --- Order Type (fixed LMT) ---
         ttk.Label(self, text="Type").grid(row=1, column=4)
@@ -275,20 +277,33 @@ class OrderFrame(tk.Frame):
 
     # ---------- helpers ----------
 
+    def _on_type_changed(self, *args):
+        """Repopulate strikes when CALL/PUT toggled."""
+        try:
+            if not self.model:
+                return
+            price = self.model.refresh_market_price()
+            if price:
+                self._populate_strike_combo(price)
+        except Exception as e:
+            logging.error(f"Type change repopulate error: {e}")
+
+
     def _populate_strike_combo(self, centre: float):
-        step = 5
+        #step = 5
+        count = 5
+
         if self.var_type.get() == "CALL":
-            first = int((centre // step) * step) + step          # first strike > centre
-            strikes = [str(v) for v in range(first, first + 5 * step, step)]
+            # 5 strikes above centre
+            strikes = [int(centre + i) for i in range(0, count + 1)]
         else:  # PUT
-            last = int((centre // step) * step)                  # last strike <= centre
-            strikes = [str(v) for v in range(last - 4 * step, last + step, step)]
+            # 5 strikes below centre
+            strikes = [int(centre - i) for i in range(0, count + 1)]
 
-        self.combo_strike["values"] = strikes
-        best = min(strikes, key=lambda s: abs(float(s) - centre))
-        self.combo_strike.set(best)
+        # set combobox
+        self.combo_strike["values"] = [str(v) for v in strikes]
+        self.combo_strike.set(str(strikes[0]))  # default to nearest logical strike
         self.combo_strike.config(state="readonly")
-
     def _set_offset(self, value: float):
         """Slam the offset entry with the pressed button's value."""
         self.entry_offset.delete(0, tk.END)
