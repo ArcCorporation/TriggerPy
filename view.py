@@ -276,9 +276,14 @@ class OrderFrame(tk.Frame):
     # ---------- helpers ----------
 
     def _populate_strike_combo(self, centre: float):
-        low  = int((centre - 50) // 5 * 5)
-        high = int((centre + 50) // 5 * 5) + 1
-        strikes = [str(v) for v in range(low, high + 1, 5)]
+        step = 5
+        if self.var_type.get() == "CALL":
+            first = int((centre // step) * step) + step          # first strike > centre
+            strikes = [str(v) for v in range(first, first + 5 * step, step)]
+        else:  # PUT
+            last = int((centre // step) * step)                  # last strike <= centre
+            strikes = [str(v) for v in range(last - 4 * step, last + step, step)]
+
         self.combo_strike["values"] = strikes
         best = min(strikes, key=lambda s: abs(float(s) - centre))
         self.combo_strike.set(best)
