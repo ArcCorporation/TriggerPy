@@ -199,17 +199,22 @@ class TWSService(EWrapper, EClient):
 
                 # ✅ Save live BUY position correctly for StopLoss reference
                 if custom_order.action.upper() == "BUY":
+                    # merge instead of blind overwrite
+                    old = self._positions_by_order_id.get(custom_order.order_id, {})
+                    new_qty = int(filled or old.get("qty", 0))
                     pos = {
-                        "uuid": custom_order.order_id,          # use the same UUID StopLoss will reference
+                        "uuid": custom_order.order_id,
                         "symbol": custom_order.symbol,
                         "expiry": custom_order.expiry,
                         "strike": custom_order.strike,
                         "right": custom_order.right,
-                        "qty": int(filled or 0),
-                        "avg_price": float(avgFillPrice or 0.0),
+                        "qty": new_qty,
+                        "avg_price": float(avgFillPrice or old.get("avg_price", 0.0)),
                         "ib_id": orderId,
                     }
                     self._positions_by_order_id[custom_order.order_id] = pos
+                    logging.info(f"[TWSService] Saved BUY position … qty={new_qty}")
+                    
                     logging.info(f"[TWSService] Saved BUY position {custom_order.symbol} ({custom_order.order_id}) qty={filled} @ {avgFillPrice}")
                 # --- 🔧 Handle SELL fills (close or reduce existing position) ---
                 if custom_order.action.upper() == "SELL":
@@ -583,7 +588,7 @@ class TWSService(EWrapper, EClient):
                 pass
             self.tickPrice = original_tick
 
-    def place_custom_order(self, custom_order, account: str = "") -> bool:
+    def place_custom_order(self, custom_order: Order, account: str = "") -> bool:
         """
         Place an order using your custom Order object from Helpers.Order.
         """
@@ -788,6 +793,8 @@ class TWSService(EWrapper, EClient):
         pos = self._positions_by_order_id.get(order_id)
         if not pos or pos["qty"] <= 0:
             logging.warning(f"[TWSService] sell_position_by_order_id: no live position for {order_id}")
+            logging.warning(f"The Position {pos}")
+            logging.warning(f"the dict {self._positions_by_order_id}")
             return False
 
         sell_qty = qty or pos["qty"]
