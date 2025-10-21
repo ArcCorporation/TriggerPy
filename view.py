@@ -177,6 +177,11 @@ class OrderFrame(tk.Frame):
         ttk.Radiobutton(self, text="Put", variable=self.var_type, value="PUT").grid(row=1, column=3)
         # When CALL/PUT changes, repopulate strikes if price known
         self.var_type.trace_add("write", self._on_type_changed)
+        self.var_use_25 = tk.BooleanVar(value=True)   # default ON
+        chk_25 = ttk.Checkbutton(self, text="Use 2.5-step",
+                                variable=self.var_use_25,
+                                command=self._on_type_changed)
+        chk_25.grid(row=1, column=4, padx=6, sticky="w")
 
         # --- Order Type (fixed LMT) ---
         ttk.Label(self, text="Type").grid(row=1, column=4)
@@ -290,20 +295,35 @@ class OrderFrame(tk.Frame):
 
 
     def _populate_strike_combo(self, centre: float):
-        #step = 5
+        step = 2.5 if self.var_use_25.get() else 1.0
         count = 5
+        strikes = []
 
         if self.var_type.get() == "CALL":
-            # 5 strikes above centre
-            strikes = [int(centre + i) for i in range(0, count + 1)]
+            first = self._next_tick(centre, step, up=True)
+            strikes = [first + i * step for i in range(count)]
         else:  # PUT
-            # 5 strikes below centre
-            strikes = [int(centre - i) for i in range(0, count + 1)]
+            last = self._next_tick(centre, step, up=False)
+            strikes = [last - i * step for i in range(count)]
+            strikes.reverse()   # keep descending order in combo
 
-        # set combobox
-        self.combo_strike["values"] = [str(v) for v in strikes]
-        self.combo_strike.set(str(strikes[0]))  # default to nearest logical strike
+        # plain integers when step==1, else 1-decimal for 2.5
+        fmt = "{:.0f}" if step == 1.0 else "{:.1f}"
+        self.combo_strike["values"] = [fmt.format(v) for v in strikes]
+
+        # default to closest to centre
+        best = min(strikes, key=lambda v: abs(v - centre))
+        self.combo_strike.set(fmt.format(best))
         self.combo_strike.config(state="readonly")
+
+# helper: snap to next valid tick (up or down)
+    def _next_tick(self, price: float, step: float, up: bool) -> float:
+        base = int(price / step) * step
+        if up and base <= price:
+            base += step
+        elif not up and base >= price:
+            base -= step
+        return base
     def _set_offset(self, value: float):
         """Slam the offset entry with the pressed button's value."""
         self.entry_offset.delete(0, tk.END)
@@ -488,8 +508,9 @@ class OrderFrame(tk.Frame):
                 self._ui(ok)
                 logging.info(f"Order placed: {order_data}")
             except Exception as e:
+                self._e = e
                 def err():
-                    self._e = e
+                    
                     self._set_status(f"Order failed: {self._e}", "red")
                     self.btn_save.config(state="normal")
                 self._ui(err)
