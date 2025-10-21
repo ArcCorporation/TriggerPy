@@ -10,7 +10,9 @@ import random
 from typing import List, Dict, Optional
 from Helpers.Order import Order
 import traceback
-# Configure logging
+from Services.polygon_service import polygon_service
+
+
 
 
 
@@ -850,25 +852,32 @@ class TWSService(EWrapper, EClient):
 
         return ok
 
-    def get_option_premium(self,
-                    symbol: str,
-                    expiry: str,
-                    strike: float,
-                    right: str,
-                    timeout: int = 3) -> Optional[float]:
+    def get_option_premium(self, symbol: str, expiry: str, strike: float, right: str, timeout: int = 3) -> Optional[float]:
         """
         Live premium for a *single* option contract.
-        Waits until bid/ask arrive instead of cancelling early.
+        Attempts IBKR snapshot first, then falls back to Polygon if data missing.
         """
         if not self.is_connected():
-            return None
+            logging.warning("[TWSService] Not connected to TWS; switching directly to Polygon.")
+            try:
+                snap = polygon_service.get_option_snapshot(symbol, expiry, strike, right)
+                if snap and snap.get("mid"):
+                    logging.info(f"[TWSService] Polygon fallback premium {symbol} {expiry} {strike}{right}: {snap['mid']}")
+                    return snap["mid"]
+                return None
+            except Exception as e:
+                logging.error(f"[TWSService] Polygon fallback failed: {e}")
+                return None
 
+        # --- IBKR First ---
         contract = self.create_option_contract(symbol, expiry, strike, right)
         conid = self.resolve_conid(contract)
         if not conid:
-            return None
-        contract.conId = conid
+            logging.warning(f"[TWSService] Failed to resolve conId for {symbol}, trying Polygon fallback.")
+            snap = polygon_service.get_option_snapshot(symbol, expiry, strike, right)
+            return snap["mid"] if snap else None
 
+        contract.conId = conid
         req_id = self._get_next_req_id()
         tick_snapshot = {"bid": None, "ask": None}
         event = threading.Event()
@@ -892,8 +901,20 @@ class TWSService(EWrapper, EClient):
             bid = tick_snapshot["bid"]
             ask = tick_snapshot["ask"]
             mid = (bid + ask) / 2 if (bid and ask) else bid or ask
-            logging.info(f"[TWSService] Premium snapshot for {symbol} {expiry} {strike}{right}: bid={bid}, ask={ask}, mid={mid}")
-            return mid
+            if mid:
+                logging.info(f"[TWSService] Premium snapshot for {symbol} {expiry} {strike}{right}: bid={bid}, ask={ask}, mid={mid}")
+                return mid
+
+            # --- Fallback to Polygon ---
+            logging.warning(f"[TWSService] No IBKR premium for {symbol} {expiry} {strike}{right}, fetching from Polygon...")
+            snap = polygon_service.get_option_snapshot(symbol, expiry, strike, right)
+            if snap and snap.get("mid"):
+                logging.info(f"[TWSService] Polygon fallback premium {symbol} {expiry} {strike}{right}: {snap['mid']}")
+                return snap["mid"]
+            elif snap and snap.get("last"):
+                logging.info(f"[TWSService] Polygon last-trade fallback {symbol}: {snap['last']}")
+                return snap["last"]
+            return None
         finally:
             try:
                 self.cancelMktData(req_id)
