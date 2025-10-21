@@ -5,7 +5,7 @@ import threading
 import time
 import websocket
 from Services.enigma3 import  Enigma3Service
-from Services.randomness import  KEY
+from Services.randomness import KEY
 
 
 class PolygonService:
@@ -84,10 +84,10 @@ class PolygonService:
             logging.error(f"[Polygon] get_option_snapshot failed: {e}")
             return None
 
-
     def _get_option_from_chain(self, underlying: str, expiry: str, strike: float, right: str):
         """
         Fallback: Pull full chain snapshot and filter the target contract.
+        Now with fuzzy expiry/strike matching for Polygon consistency.
         """
         try:
             url = f"{self.base_url}/v3/snapshot/options/{underlying.upper()}"
@@ -100,43 +100,66 @@ class PolygonService:
                 logging.error(f"[Polygon] Chain snapshot empty for {underlying}")
                 return None
 
-            # Normalize strike (Polygon may store 445.0 as 445)
-            target_strike = round(strike, 1)
+            target_year = expiry[:4]
+            target_month = expiry[4:6]
+            target_day = expiry[6:8]
             right = right.upper()
+            best_match = None
+            best_diff = 999
 
             for item in results:
                 details = item.get("details", {})
                 if not details:
                     continue
-                if (
-                    details.get("expiration_date", "").replace("-", "") == expiry
-                    and round(details.get("strike_price", 0), 1) == target_strike
-                    and details.get("contract_type", "").upper().startswith(right)
-                ):
-                    quote = item.get("last_quote", {})
-                    trade = item.get("last_trade", {})
-                    bid, ask, last = quote.get("bid"), quote.get("ask"), trade.get("price")
-                    mid = (bid + ask) / 2 if bid and ask else None
 
-                    return {
-                        "symbol": details.get("ticker"),
-                        "bid": bid,
-                        "ask": ask,
-                        "last": last,
-                        "mid": mid,
-                        "updated": item.get("updated", None),
-                    }
+                exp = details.get("expiration_date", "")
+                strike_price = details.get("strike_price")
+                ctype = details.get("contract_type", "").lower()
 
-            logging.error(f"[Polygon] Contract not found in chain for {underlying} {expiry} {strike}{right}")
-            return None
+                if not exp or strike_price is None or not ctype:
+                    continue
+
+                exp_y, exp_m, exp_d = exp.split("-")
+                if exp_y != target_year or exp_m != target_month:
+                    continue
+
+                # Allow +/- 7 days tolerance (weekly misalignment)
+                day_diff = abs(int(exp_d) - int(target_day))
+                if day_diff > 7:
+                    continue
+
+                # Compare contract type (first letter enough)
+                if ctype[0].upper() != right[0]:
+                    continue
+
+                # Compare strike closeness
+                diff = abs(float(strike_price) - float(strike))
+                if diff < best_diff:
+                    best_diff = diff
+                    best_match = item
+
+            if not best_match:
+                logging.error(f"[Polygon] Contract not found in chain for {underlying} {expiry} {strike}{right}")
+                return None
+
+            quote = best_match.get("last_quote", {})
+            trade = best_match.get("last_trade", {})
+            bid, ask, last = quote.get("bid"), quote.get("ask"), trade.get("price")
+            mid = (bid + ask) / 2 if bid and ask else None
+
+            details = best_match.get("details", {})
+            return {
+                "symbol": details.get("ticker"),
+                "bid": bid,
+                "ask": ask,
+                "last": last,
+                "mid": mid,
+                "updated": best_match.get("updated", None),
+            }
 
         except Exception as e:
             logging.error(f"[Polygon] _get_option_from_chain failed: {e}")
             return None
-
-
-
-
 
     def get_last_trade(self, symbol: str):
         url = f"{self.base_url}/v2/last/trade/{symbol.upper()}"
@@ -204,7 +227,7 @@ class PolygonService:
                     self.ws.run_forever(ping_interval=20, ping_timeout=10)
                 except Exception as e:
                     logging.error(f"[Polygon] WS connection error: {e}")
-                time.sleep(5)  # reconnect denemesi
+                time.sleep(5)
 
         self.ws_thread = threading.Thread(target=run, daemon=True)
         self.ws_thread.start()
@@ -218,7 +241,7 @@ class PolygonService:
         try:
             data = json.loads(message)
             for event in data:
-                if event.get("ev") == "T":  # trade event
+                if event.get("ev") == "T":
                     sym = event.get("sym")
                     price = event.get("p")
                     cb = self.subscriptions.get(sym)
@@ -237,10 +260,8 @@ class PolygonService:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     svc = PolygonService()
-    svc.subscribe("TSLA", lambda p: print("TSLA tick:", p))
-
-    # Test için 10 saniye bekleyelim
-    time.sleep(10)
-
+    snapshot = svc.get_option_snapshot("QQQ", "20251021", 612.5, "C")
+    print(snapshot)
+    time.sleep(3)
 
 polygon_service = PolygonService()
