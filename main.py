@@ -247,26 +247,58 @@ class ArcTriggerApp(tk.Tk):
     # ------------------------------------------------------------------
     def show_watchers(self):
         import tkinter as tk
-        from tkinter import ttk
+        from tkinter import ttk, messagebox
+
         win = tk.Toplevel(self)
         win.title("Active Watchers")
-        win.geometry("800x300")
-        cols = ("Order ID", "Symbol", "Type", "Mode", "Status", "StopLoss", "LastPrice", "StartTime")
+        win.geometry("900x350")
+
+        cols = ("Order ID", "Symbol", "Type", "Mode", "Status", "StopLoss", "LastPrice", "StartTime", "Action")
         tree = ttk.Treeview(win, columns=cols, show="headings")
+
         for c in cols:
             tree.heading(c, text=c)
             tree.column(c, width=100, anchor="center")
+
         tree.pack(fill="both", expand=True)
 
+        # Scrollbars
+        yscroll = ttk.Scrollbar(win, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=yscroll.set)
+        yscroll.pack(side="right", fill="y")
+
+        def on_cancel(order_id):
+            try:
+                watcher_info.cancel(order_id)
+                messagebox.showinfo("Cancelled", f"Watcher {order_id} cancelled.")
+            except Exception as e:
+                logging.info(f"Failed to cancel watcher {order_id}: {e}")
+                messagebox.showerror("Error", f"Failed to cancel watcher {order_id}: {e}")
+
         def refresh():
-            tree.delete(*tree.get_children())
+            # Clear and re-populate
+            for i in tree.get_children():
+                tree.delete(i)
             for w in watcher_info.list_all():
+                order_id = w["order_id"]
+                # Insert row
                 tree.insert("", "end", values=(
-                    w["order_id"], w["symbol"], w["watcher_type"], w["mode"],
+                    order_id, w["symbol"], w["watcher_type"], w["mode"],
                     w["status_label"], w["stop_loss"], w["last_price"],
-                    w["start_time"][:19]))
+                    w["start_time"][:19], "Cancel"
+                ))
             win.after(2000, refresh)
+
+        def on_tree_click(event):
+            item = tree.identify_row(event.y)
+            col = tree.identify_column(event.x)
+            if col == f"#{len(cols)}" and item:  # 'Action' column
+                order_id = tree.item(item)["values"][0]
+                on_cancel(order_id)
+
+        tree.bind("<Button-1>", on_tree_click)
         refresh()
+
 
     # ------------------------------------------------------------------
     #  CONNECTIONS

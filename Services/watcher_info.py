@@ -1,6 +1,7 @@
 import threading
 from datetime import datetime
 from typing import Dict, Optional
+from Helpers.Order import Order
 
 # ==========================================================
 # Status Constants (hex codes for clarity + professionalism)
@@ -32,8 +33,10 @@ class ThreadInfo:
                  symbol: str,
                  watcher_type: str = "trigger",
                  mode: str = "poll",
-                 stop_loss: Optional[float] = None):
+                 stop_loss: Optional[float] = None,
+                 order: Optional[Order] = None):
         self.order_id = order_id
+        self.order = order
         self.symbol = symbol
         self.watcher_type = watcher_type      # "trigger" or "stop_loss"
         self.mode = mode                      # "poll" or "ws"
@@ -43,6 +46,9 @@ class ThreadInfo:
         self.last_price: Optional[float] = None
         self.info: Dict = {}
         self._lock = threading.Lock()
+    
+    def cancel(self):
+        self.order.mark_cancelled()
 
     def update_status(self, new_status: int, last_price: Optional[float] = None, info: Optional[Dict] = None):
         """
@@ -111,6 +117,10 @@ class WatcherInfo:
     def list_all(self):
         with self._lock:
             return [w.to_dict() for w in self._watchers.values()]
+        
+    def cancel(self, order_id: str):
+        watcher = self.get_watcher(order_id)
+        watcher.cancel()
 
 
 # ✅ Global singleton instance (the library)

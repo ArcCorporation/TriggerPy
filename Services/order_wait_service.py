@@ -36,7 +36,7 @@ class OrderWaitService:
         order_id = order.order_id
 
         # Register ThreadInfo
-        tinfo = ThreadInfo(order_id, order.symbol, watcher_type="trigger", stop_loss=order.sl_price, mode=mode)
+        tinfo = ThreadInfo(order_id, order.symbol, watcher_type="trigger", stop_loss=order.sl_price, mode=mode,order=order)
         watcher_info.add_watcher(tinfo)
         tinfo.update_status(STATUS_RUNNING)
 
@@ -55,7 +55,7 @@ class OrderWaitService:
                 delay = 2
                 last = 0
                 try:
-                    while runtime_man.is_run():
+                    while runtime_man.is_run() and order.state == OrderState.PENDING:
                         with self.lock:
                             if order_id not in self.pending_orders or order_id in self.cancelled_orders:
                                 watcher_info.remove(order_id)
@@ -77,8 +77,8 @@ class OrderWaitService:
                             tinfo.update_status(STATUS_RUNNING, last_price=last_price)
 
                         if last_price and order.is_triggered(last_price):
-                            self._finalize_order(order_id, order)
-                            tinfo.update_status(STATUS_FINALIZED, last_price=last_price)
+                            self._finalize_order(order_id, order,tinfo, last_price)
+                            #tinfo.update_status(STATUS_FINALIZED, last_price=last_price)
                             with self.lock:
                                 if order_id in self.pending_orders:
                                     del self.pending_orders[order_id]
@@ -298,37 +298,8 @@ class OrderWaitService:
                 if order_id in self.pending_orders:
                     del self.pending_orders[order_id]
 
-    def _poll_snapshot(self, order_id: str, order: Order):
-        """Alternate mode: continuously poll snapshot until trigger/cancel."""
-        last_print = 0
-        delay = 5
-        while True:
-            with self.lock:
-                if order_id not in self.pending_orders or order_id in self.cancelled_orders:
-                    return
-
-            snap = self.polygon.get_snapshot(order.symbol)
-            if not snap:
-                time.sleep(self.poll_interval)
-                continue
-            now = time.time()
-            last_price = snap.get("last")
-            msg = f"[WaitService] Poll {order.symbol} → {last_price}"
-            if now - last_print >= delay:
-                logging.info(msg)
-                print(msg)
-                last_print = now
-
-            if last_price and order.is_triggered(last_price):
-                self._finalize_order(order_id, order)
-                with self.lock:
-                    if order_id in self.pending_orders:
-                        del self.pending_orders[order_id]
-                return
-
-            time.sleep(self.poll_interval)
-
-    def _finalize_order(self, order_id: str, order: Order):
+  
+    def _finalize_order(self, order_id: str, order: Order,tinfo: ThreadInfo,last_price):
         """Sends the order to TWS using the new TWSService."""
         
 
@@ -357,6 +328,7 @@ class OrderWaitService:
                         msg = f"[WaitService] Order finalized {order_id} → IB ID: {order._ib_order_id}"
                         logging.info(msg)
                         watcher_info.update_watcher(order_id, STATUS_FINALIZED)
+                        tinfo.update_status(STATUS_FINALIZED, last_price=last_price)
                     else:
                         logging.warning(f"[WaitService] Order {order_id} not filled within timeout window.")
 
