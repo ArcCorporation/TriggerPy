@@ -146,7 +146,9 @@ class GeneralApp:
         """
         if not self._tws:
             raise RuntimeError("GeneralApp: TWS not connected")
-        return self._tws.get_option_snapshot(symbol, expiry, strike, right)
+        #twsshot = self._tws.get_option_snapshot(symbol, expiry, strike, right)
+        polygotshot = self.polygon.get_option_snapshot(symbol,expiry, strike, right)
+        return polygotshot
 
     def connect(self) -> bool:
         """Connect global services once for all models."""
