@@ -9,6 +9,15 @@ from Services.order_manager import order_manager
 from Helpers.Order import Order, OrderState
 import random
 
+def align_expiry_to_friday(expiry: str) -> str:
+    import datetime
+    y, m, d = int(expiry[:4]), int(expiry[4:6]), int(expiry[6:8])
+    date = datetime.date(y, m, d)
+    # shift to Friday if not already
+    while date.weekday() != 4:
+        date += datetime.timedelta(days=1)
+    return date.strftime("%Y%m%d")
+
 # --- Singleton: GeneralApp ---
 class GeneralApp:
     def __init__(self):
@@ -377,6 +386,7 @@ class AppModel:
         Fails gracefully if TWS snapshot times out.
         status_callback: optional fn(text, color) to attach directly to order.
         """
+        self._expiry = align_expiry_to_friday(self._expiry)
         # 1. basic sanity
         if not all([self._symbol, self._expiry, self._strike, self._right]):
             raise ValueError("Option parameters not set")
