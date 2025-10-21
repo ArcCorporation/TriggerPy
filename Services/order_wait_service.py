@@ -192,7 +192,8 @@ class OrderWaitService:
                                 order.previous_id,
                                 contract,
                                 qty=live_qty,
-                                limit_price=mid_premium
+                                limit_price=mid_premium,
+                                order=order
 
                             )
                             if success:

@@ -789,7 +789,7 @@ class TWSService(EWrapper, EClient):
 
 
     def sell_position_by_order_id(self, order_id: str, contract : Contract, qty: int | None = None,
-                              limit_price: float | None = None, account: str = "") -> bool:
+                              limit_price: float | None = None, account: str = "", ex_order: Optional[Order] = None) -> bool:
         pos = self._positions_by_order_id.get(order_id)
         if not pos or pos["qty"] <= 0:
             logging.warning(f"[TWSService] sell_position_by_order_id: no live position for {order_id}")
@@ -799,17 +799,14 @@ class TWSService(EWrapper, EClient):
 
         sell_qty = qty or pos["qty"]
 
-        sell_order = Order(
-            symbol=pos["symbol"],
-            expiry=pos["expiry"],
-            strike=pos["strike"],
-            right=pos["right"],
-            qty=sell_qty,
-            entry_price=limit_price or pos["avg_price"],
-            action="SELL",
-        )
+        #sell_order = Order(symbol=pos["symbol"],expiry=pos["expiry"],strike=pos["strike"],right=pos["right"],qty=sell_qty,entry_price=limit_price or pos["avg_price"],action="SELL",)
+        ex_order.symbol = pos["symbol"]
+        ex_order.expiry = pos["expiry"]
+        ex_order.strike = pos["strike"]
+        ex_order.right = pos["right"]
+        ex_order.qty  = sell_qty
 
-        ok = self.sell_custom_order(sell_order, contract, account=account)
+        ok = self.sell_custom_order(ex_order, contract, account=account)
         if ok:
             logging.info(f"[TWSService] SELL order submitted for {order_id}, waiting for fill confirmation.")
             # 🔧 Do NOT modify qty here; handled in orderStatus/execDetails
