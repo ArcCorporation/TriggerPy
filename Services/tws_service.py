@@ -749,8 +749,8 @@ class TWSService(EWrapper, EClient):
     def sell_custom_order(self, custom_order: Order, contract : Contract, account: str = "", ) -> bool:
         """
         Dedicated SELL method for option orders.
-        - Dynamically recalculates quantity from live premium if position_size is set.
-        - Falls back to custom_order.qty if manually specified.
+        - Uses the correct closing quantity if a position ID is provided (from the StopLoss Watcher).
+        - Otherwise, dynamically recalculates quantity from live premium if position_size is set.
         """
         if not self.is_connected():
             logging.error("Cannot place SELL order: Not connected to TWS")
@@ -758,19 +758,27 @@ class TWSService(EWrapper, EClient):
 
         try:
             custom_order.action = "SELL"
-
             ib_right = "C" if custom_order.right.upper() in ["C", "CALL"] else "P"
             
-            # ✅ Recalculate quantity based on live premium if _position_size available
-            premium = self.get_option_premium(custom_order.symbol, custom_order.expiry, custom_order.strike, ib_right)
-            if not premium or premium <= 0:
-                raise RuntimeError(f"No live premium for {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right}")
+            # --- FIX START: Ensure Quantity for Closing Order is NOT Recalculated ---
+            # A closing order should already have custom_order.qty set to the position size 
+            # by sell_position_by_order_id, so we skip recalculation.
+            is_closing_position = getattr(custom_order, "previous_id", None) and custom_order.qty > 0
 
-            if getattr(custom_order, "_position_size", None):
-                qty = custom_order.calc_contracts_from_premium(premium)
-                custom_order.qty = qty
-            elif not getattr(custom_order, "qty", None):
-                raise RuntimeError("SELL order has neither qty nor position_size set")
+            if not is_closing_position:
+                # Original dynamic sizing logic for non-closing orders (if intentionally opening new short or complex position)
+                premium = self.get_option_premium(custom_order.symbol, custom_order.expiry, custom_order.strike, ib_right)
+                if not premium or premium <= 0:
+                    raise RuntimeError(f"No live premium for {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right}")
+
+                if getattr(custom_order, "_position_size", None):
+                    qty = custom_order.calc_contracts_from_premium(premium)
+                    custom_order.qty = qty
+                elif not getattr(custom_order, "qty", None):
+                    raise RuntimeError("SELL order has neither qty nor position_size set")
+            
+            # --- FIX END ---
+
 
             # Build IB order
             ib_order = custom_order.to_ib_order(
@@ -784,7 +792,7 @@ class TWSService(EWrapper, EClient):
             custom_order._ib_order_id = order_id
             self._pending_orders[custom_order.order_id] = custom_order
             
-            # --- ✅ FIX: Use previous_id to link SELL IB ID to BUY UUID ---
+            # --- Link SELL IB ID to BUY UUID ---
             buy_order_uuid = custom_order.previous_id
             if buy_order_uuid and buy_order_uuid in self._positions_by_order_id:
                 # Link the new SELL IB ID to the original BUY custom UUID
