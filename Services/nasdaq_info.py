@@ -74,3 +74,24 @@ def market_status_string(now: datetime = None) -> str:
         return f"Market is open, time to close in {time_str}"
     else:
         return f"Market is closed, time to open in {time_str}"
+
+
+def is_market_closed_or_pre_market(now: datetime = None) -> bool:
+    """
+    Check if NASDAQ is currently closed or in pre-market (before 9:30 AM ET).
+    This includes weekends and after-hours (after 4:00 PM ET).
+    """
+    if now is None:
+        now = datetime.now(EASTERN)
+    else:
+        now = now.astimezone(EASTERN)
+
+    # Check for weekend closure
+    if now.weekday() >= 5: # Saturday or Sunday
+        return True
+    
+    # Check for time closure
+    if now.time() < MARKET_OPEN or now.time() >= MARKET_CLOSE:
+        return True
+
+    return False
