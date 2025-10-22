@@ -225,7 +225,7 @@ class Order:
         return True
 
     def to_ib_order(self, order_type="LMT", limit_price=None, stop_price=None,
-                    parent_id=None, transmit=True,closing=False) -> IBOrder:
+                    parent_id=None, transmit=True, closing=False, outside_rth=False) -> IBOrder:
         """
         Convert this custom Order into an Interactive Brokers IBOrder.
         - order_type: "MKT", "LMT", or "STP"
@@ -233,6 +233,8 @@ class Order:
         - stop_price: used if order_type == "STP"
         - parent_id: used if this order is part of a bracket
         - transmit: whether to transmit immediately
+        - closing: Flag for closing position (SELL_TO_CLOSE/BUY_TO_CLOSE)
+        - outside_rth: NEW: Set True to allow extended-hours trading.
         """
         ib_order = IBOrder()
         ib_order.action = ("SELL_TO_CLOSE" if closing and self.action == "BUY" else
@@ -252,5 +254,8 @@ class Order:
         ib_order.transmit = transmit
         ib_order.eTradeOnly = False
         ib_order.firmQuoteOnly = False
+        
+        # ✅ FIX: Enable Extended Hours trading
+        ib_order.outsideRth = outside_rth
 
         return ib_order
