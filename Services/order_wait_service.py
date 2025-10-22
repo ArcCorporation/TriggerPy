@@ -171,16 +171,9 @@ class OrderWaitService:
                     if triggered:
                         try:
                             logging.info(f"[StopLoss] triggered {order.symbol} {last_price} {stop_loss_price}")
-                            snapshot = self.tws.get_option_snapshot(order.symbol, order.expiry, order.strike, order.right)
-                            if not snapshot or snapshot.get("ask") is None:
-                                logging.error("[StopLoss] Snapshot timeout – cannot compute premium")
-                                tinfo.update_status(STATUS_FAILED, info={"error": "No snapshot"})
-                                return
+                            
+                            # --- Removed risky Limit Price calculation. Order is now MKT. ---
 
-                            mid_premium = snapshot["ask"] * 1.05
-                            tick = 0.01 if mid_premium < 3 else 0.05
-                            mid_premium = int(round(mid_premium / tick)) * tick
-                            mid_premium = round(mid_premium, 2)
                             pos = self.tws.get_position_by_order_id(order.previous_id)
                             if not pos or pos.get("qty", 0) <= 0:
                                 logging.warning(f"[StopLoss] No live position for {order.previous_id}, cannot exit.")
@@ -192,12 +185,12 @@ class OrderWaitService:
                                 order.previous_id,
                                 contract,
                                 qty=live_qty,
-                                limit_price=mid_premium,
-                                order=order
+                                limit_price=None, # Market order, so no limit price
+                                ex_order=order
 
                             )
                             if success:
-                                logging.info(f"[StopLoss] Sold {live_qty} {order.symbol} via TWS position map @ {mid_premium}")
+                                logging.info(f"[StopLoss] Sold {live_qty} {order.symbol} via TWS position map - MKT Exit")
                                 order.mark_finalized(f"Stop-loss triggered @ {last_price}")
                                 tinfo.update_status(STATUS_FINALIZED, last_price=last_price)
                             else:
@@ -345,13 +338,15 @@ class OrderWaitService:
                             tp_price=None,
                             sl_price=order.sl_price,
                             action="SELL",
+                            type="MKT", # <--- FIX: Use MKT for guaranteed stop-loss exit
                             trigger=None
                         )
                         ex_order = exit_order.set_position_size(order._position_size) 
+                        ex_order.previous_id = order.order_id
                         ex_order.mark_active()
                         logging.info(f"[WAITSERVICE] Spawned exit order {ex_order.order_id} "
                                 f"stop={stop_loss_level} ({order.right})")
-                        ex_order.previous_id = order.order_id
+                        
                         self.start_stop_loss_watcher(ex_order, stop_loss_level)
                         #logging.info(f"BEWARE NOT LAUNCHING STOP LOSS")
 
