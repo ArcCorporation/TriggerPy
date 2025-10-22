@@ -386,7 +386,7 @@ class AppModel:
     ) -> Dict:
         """
         Create & transmit an option order.  
-        Fails gracefully if TWS snapshot times out.
+        Fails gracefully if premium calculation times out.
         status_callback: optional fn(text, color) to attach directly to order.
         """
         self._expiry = align_expiry_to_friday(self._expiry)
@@ -402,26 +402,31 @@ class AppModel:
             raise ValueError(f"Trigger {trigger_price} invalid for current price {current_price}")
 
         # 2. live option premium (snapshot) – can time-out
-        snapshot = general_app.get_option_premium(
+        # ⚡ FIX: Call get_option_premium which has the Polygon fallback and returns the mid-price float ⚡
+        premium = general_app.get_option_premium(
             self._symbol, self._expiry, self._strike, self._right
         )
-        if snapshot is None or snapshot.get("mid") is None:
-            logging.error("place_option_order: TWS snapshot time-out – cannot set TP/SL")
-            raise RuntimeError("No option premium available from TWS snapshot")
+        
+        # ⚡ FIX: Check if the returned float premium is valid ⚡
+        if premium is None or premium <= 0:
+            logging.error("place_option_order: Failed to get option premium (TWS/Polygon fallback failed)")
+            raise RuntimeError("No option premium available for order price calculation")
 
-        mid_premium = snapshot["ask"] + arcTick
+        # Use the premium (mid-price) directly
+        mid_premium = premium + arcTick
 
+        # 3. tick rounding logic (keep existing logic)
         if mid_premium < 3:
             tick = 0.01
+        elif mid_premium >= 5:
+            tick = 0.15
         else:
             tick = 0.05
-
-        if mid_premium >= 5:
-            tick = 0.15
-
+        
         mid_premium = int(round(mid_premium / tick)) * tick
         mid_premium = round(mid_premium, 2)
 
+        # 4. stop loss / take profit calculation (keep existing logic)
         if self._stop_loss is None:
             self._stop_loss = round(mid_premium * 0.8, 2)
         if self._take_profit is None:
