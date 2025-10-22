@@ -11,7 +11,7 @@ from typing import List, Dict, Optional
 from Helpers.Order import Order
 import traceback
 from Services.polygon_service import polygon_service
-from nasdaq_info import is_market_closed_or_pre_market # <-- NEW IMPORT
+from Services.nasdaq_info import is_market_closed_or_pre_market # <-- NEW IMPORT
 
 
 
