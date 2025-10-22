@@ -7,7 +7,7 @@ from typing import Optional, Dict
 class OrderManager:
     def __init__(self, tws_service: TWSService):
         self.tws_service = tws_service
-        self.finalized_orders: Dict[Order] = {}  # Dictionary to hold finalized orders
+        self.finalized_orders: Dict[str, Order] = {}  # Dictionary to hold finalized orders
 
     def add_finalized_order(self, order_id, order):
         """
@@ -15,33 +15,71 @@ class OrderManager:
         """
         self.finalized_orders[order_id] = order
         logging.info(f"Added finalized order {order_id} to management.")
+    
+    # ------------------ NEW HELPER FOR EXIT ORDER CREATION ------------------
+    def _create_exit_order(self, base_order: Order, sell_qty: int) -> Order:
+        """
+        Creates a new Market SELL Order object for exiting a position.
+        Crucially sets action='SELL', type='MKT', and links to the base_order's ID.
+        """
+        exit_order = Order(
+            symbol=base_order.symbol,
+            expiry=base_order.expiry,
+            strike=base_order.strike,
+            right=base_order.right,
+            qty=sell_qty,
+            # For MKT orders, entry_price is not used for execution, but we'll use base.entry_price for reference
+            entry_price=base_order.entry_price, 
+            tp_price=None,
+            sl_price=None,
+            action="SELL",
+            type="MKT", # ⚡ FORCE MARKET ORDER FOR GUARANTEED FILL ⚡
+            trigger=None
+        )
+        # This is CRUCIAL for position tracking in TWSService
+        exit_order.previous_id = base_order.order_id
         
+        # Copy position size for internal consistency
+        if getattr(base_order, "_position_size", None):
+            exit_order.set_position_size(base_order._position_size)
+        
+        return exit_order
+    # ------------------------------------------------------------------------
 
     def issue_sell_order(self,
                      base_order_id: str,
                      sell_qty: int,
-                     limit_price: Optional[float] = None) -> Optional[str]:
+                     exit_order: Order) -> Optional[str]: 
         """
         Sell an existing TWS-tracked position by its order_id.
-        Uses tws_service.sell_position_by_order_id() for consistency.
+        Requires a pre-populated exit_order (with qty and previous_id) for execution.
         """
-        logging.info(f"[OrderManager] is attempting sale of options {base_order_id}:{sell_qty}:{limit_price}")
+        logging.info(f"[OrderManager] is attempting MKT sale of options {base_order_id} x{sell_qty}")
         pos = self.tws_service.get_position_by_order_id(base_order_id)
         if not pos or pos.get("qty", 0) <= 0:
             logging.info(f"[OrderManager] issue_sell_order: no live position for {base_order_id}")
             return None
 
-        # use TWSService’s built-in position selling
+        # Resolve the Contract object from the position details
+        contract = self.tws_service.create_option_contract(
+             pos["symbol"], pos["expiry"], pos["strike"], pos["right"]
+        )
+        
+        # Use TWSService’s built-in position selling, passing the custom exit Order
+        # Note: limit_price is set to None because the Order type is MKT
         ok = self.tws_service.sell_position_by_order_id(
-            base_order_id, qty=sell_qty, limit_price=limit_price
+            base_order_id, 
+            contract=contract, 
+            qty=sell_qty, 
+            limit_price=None, 
+            ex_order=exit_order # Pass the pre-created exit order
         )
         if ok:
-            logging.info(f"[OrderManager] sell order placed -> base={base_order_id}, qty={sell_qty}, limit={limit_price}")
+            logging.info(f"[OrderManager] MKT SELL order placed -> base={base_order_id}, qty={sell_qty}")
             return base_order_id  # keep same id for tracking continuity
 
-        logging.error(f"[OrderManager] sell order failed for {base_order_id}")
+        logging.error(f"[OrderManager] MKT SELL order failed for {base_order_id}")
         return None
-
 
 
     def remove_order(self, order_id):
@@ -63,61 +101,56 @@ class OrderManager:
 
     def take_profit(self, order_id: str,  sell_pct: float) -> Optional[str]:
         """
-        Sell a portion (sell_pct) of the contracts once option gains profit_pct.
+        Sell a portion (sell_pct) of the contracts using a Market Order to capture profit.
         """
         base = self.finalized_orders.get(order_id)
         if not base or base.action != "BUY":
             logging.info("[OrderManager] take_profit: no buy-order %s", order_id)
             return None
 
-        sell_qty = max(1, int(base.qty * sell_pct))
-        order = self.finalized_orders[order_id]
-        snapshot = self.tws_service.get_option_snapshot(order.symbol, order.expiry, order.strike, order.right)
-        if not snapshot or snapshot.get("ask") is None:
-            logging.info("[StopLOrderManageross] Snapshot timeout – cannot compute premium")
-            return
-
-        mid_premium = snapshot["ask"] * 1.05
-        tick = 0.01 if mid_premium < 3 else 0.05
-        mid_premium = int(round(mid_premium / tick)) * tick
-        mid_premium = round(mid_premium, 2)
-
-        profit_price = mid_premium
+        pos = self.tws_service.get_position_by_order_id(order_id)
+        if not pos or pos.get("qty", 0) <= 0:
+            logging.warning(f"[OrderManager] take_profit: position already closed for {order_id}")
+            return None
+        
+        # Calculate quantity based on *live* position quantity
+        live_qty = pos["qty"]
+        sell_qty = max(1, int(live_qty * sell_pct))
 
         logging.info(f"[OrderManager] TAKE PROFIT triggered for {order_id}: "
-                    f"{sell_pct*100:.0f}% qty @ {sell_pct *100}% profit "
-                    f"(limit={profit_price}, entry={base.entry_price})")
+                    f"Selling {sell_qty} contracts (MKT Exit).")
+        
+        # Create a MKT exit order
+        exit_order = self._create_exit_order(base, sell_qty)
 
-        return self.issue_sell_order(order_id, sell_qty, limit_price=profit_price)
+        # Execute sale
+        return self.issue_sell_order(order_id, sell_qty, exit_order=exit_order)
     
     def breakeven(self, order_id: str) -> Optional[str]:
         """
-        Sell 100 % of the contracts at the original trigger price (breakeven).
+        Sell 100% of the remaining contracts using a Market Order.
+        (Original Breakeven logic of selling at entry price is replaced by MKT for guaranteed exit.)
         """
         base = self.finalized_orders.get(order_id)
         if not base or base.action != "BUY":
             logging.info("[OrderManager] breakeven: no buy-order %s", order_id)
             return None
 
-        # use the exact qty that was finally bought
-        sell_qty = base.qty
-        # breakeven = trigger price of the original buy
-        order = base
-        snapshot = self.tws_service.get_option_snapshot(order.symbol, order.expiry, order.strike, order.right)
-        if not snapshot or snapshot.get("ask") is None:
-            logging.info("[StopLOrderManageross] Snapshot timeout – cannot compute premium")
-            return
+        pos = self.tws_service.get_position_by_order_id(order_id)
+        if not pos or pos.get("qty", 0) <= 0:
+            logging.warning(f"[OrderManager] breakeven: position already closed for {order_id}")
+            return None
+            
+        sell_qty = pos["qty"] # Sell 100% of remaining
 
-        mid_premium = snapshot["ask"] * 1.05
-        tick = 0.01 if mid_premium < 3 else 0.05
-        mid_premium = int(round(mid_premium / tick)) * tick
-        mid_premium = round(mid_premium, 2)
-        breakeven_price = mid_premium
         logging.info(f"[OrderManager] BREAKEVEN triggered for {order_id}: "
-             f"symbol={base.symbol}, qty={base.qty}, price={base.entry_price}")
+             f"Selling {sell_qty} contracts (MKT Exit).")
 
+        # Create a MKT exit order
+        exit_order = self._create_exit_order(base, sell_qty)
 
-        return self.issue_sell_order(order_id, sell_qty, limit_price=breakeven_price)
+        # Execute sale
+        return self.issue_sell_order(order_id, sell_qty, exit_order=exit_order)
 
     def get_order_status(self, order_id):
         """
