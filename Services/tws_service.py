@@ -759,9 +759,6 @@ class TWSService(EWrapper, EClient):
 
             ib_right = "C" if custom_order.right.upper() in ["C", "CALL"] else "P"
             
-
-            
-
             # ✅ Recalculate quantity based on live premium if _position_size available
             premium = self.get_option_premium(custom_order.symbol, custom_order.expiry, custom_order.strike, ib_right)
             if not premium or premium <= 0:
@@ -784,15 +781,18 @@ class TWSService(EWrapper, EClient):
             order_id = self.next_valid_order_id
             custom_order._ib_order_id = order_id
             self._pending_orders[custom_order.order_id] = custom_order
-            # --- 🔧 Link SELL order to existing BUY position if available ---
-            for uuid, pos in self._positions_by_order_id.items():
-                if (pos["symbol"] == custom_order.symbol and
-                    pos["expiry"] == custom_order.expiry and
-                    pos["strike"] == custom_order.strike and
-                    pos["right"] == custom_order.right):
-                    self._ib_to_order_id[order_id] = uuid
-                    logging.info(f"[TWSService] Linked SELL {order_id} to existing BUY position {uuid}")
-                    break
+            
+            # --- ✅ FIX: Use previous_id to link SELL IB ID to BUY UUID ---
+            buy_order_uuid = custom_order.previous_id
+            if buy_order_uuid and buy_order_uuid in self._positions_by_order_id:
+                # Link the new SELL IB ID to the original BUY custom UUID
+                self._ib_to_order_id[order_id] = buy_order_uuid
+                logging.info(f"[TWSService] Linked SELL IBID {order_id} to BUY Position UUID {buy_order_uuid}")
+            else:
+                # Fallback: link to its own ID if position is not found
+                logging.warning(f"[TWSService] No BUY position found for {buy_order_uuid}. Linking SELL to itself.")
+                self._ib_to_order_id[order_id] = custom_order.order_id
+
 
             self.placeOrder(order_id, contract, ib_order)
             custom_order._placed_ts = time.time() * 1000
@@ -809,6 +809,7 @@ class TWSService(EWrapper, EClient):
             logging.error(f"[TWSService] Failed to sell order {custom_order.order_id}: {e}")
             custom_order.mark_failed(reason=str(e))
             return False
+
 
     def get_position_by_order_id(self, order_id: str):
         return self._positions_by_order_id.get(order_id)
@@ -838,12 +839,14 @@ class TWSService(EWrapper, EClient):
 
         sell_qty = qty or pos["qty"]
 
-        #sell_order = Order(symbol=pos["symbol"],expiry=pos["expiry"],strike=pos["strike"],right=pos["right"],qty=sell_qty,entry_price=limit_price or pos["avg_price"],action="SELL",)
         ex_order.symbol = pos["symbol"]
         ex_order.expiry = pos["expiry"]
         ex_order.strike = pos["strike"]
         ex_order.right = pos["right"]
         ex_order.qty  = sell_qty
+        
+        # 💡 FIX: Set the previous_id on the exit order so sell_custom_order can link it
+        ex_order.previous_id = order_id 
 
         ok = self.sell_custom_order(ex_order, contract, account=account)
         if ok:
@@ -851,6 +854,7 @@ class TWSService(EWrapper, EClient):
             # 🔧 Do NOT modify qty here; handled in orderStatus/execDetails
 
         return ok
+
 
     def get_option_premium(self, symbol: str, expiry: str, strike: float, right: str, timeout: int = 3) -> Optional[float]:
         """
