@@ -1,13 +1,13 @@
 import logging
 from Services.tws_service import create_tws_service, TWSService
 from Helpers.Order import Order
-from typing import Optional
+from typing import Optional, Dict
 
 
 class OrderManager:
     def __init__(self, tws_service: TWSService):
         self.tws_service = tws_service
-        self.finalized_orders = {}  # Dictionary to hold finalized orders
+        self.finalized_orders: Dict[Order] = {}  # Dictionary to hold finalized orders
 
     def add_finalized_order(self, order_id, order):
         """
