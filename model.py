@@ -147,6 +147,9 @@ class GeneralApp:
             return False
         return self._tws.place_custom_order(order)
 
+    def get_option_premium(self, symbol: str, expiry: str, strike: float, right: str):
+        return self.tws.get_option_premium(symbol,expiry,strike, right)
+
     def get_option_snapshot(self, symbol: str, expiry: str, strike: float, right: str):
         """
         Wrapper around TWSService.get_option_snapshot.
@@ -399,7 +402,7 @@ class AppModel:
             raise ValueError(f"Trigger {trigger_price} invalid for current price {current_price}")
 
         # 2. live option premium (snapshot) – can time-out
-        snapshot = general_app.get_option_snapshot(
+        snapshot = general_app.get_option_premium(
             self._symbol, self._expiry, self._strike, self._right
         )
         if snapshot is None or snapshot.get("mid") is None:
