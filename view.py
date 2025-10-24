@@ -146,7 +146,7 @@ class OrderFrame(tk.Frame):
     def __init__(self, parent, order_id: int = 0, **kwargs):
         super().__init__(parent, relief="groove", borderwidth=2, padx=8, pady=8, **kwargs)
         self.order_id = order_id
-        self.model = None
+        self.model: Optional[AppModel] = None # Explicitly type
         self.current_symbol: Optional[str] = None
         self._last_price = None   # cached last market price
 
@@ -171,21 +171,28 @@ class OrderFrame(tk.Frame):
         self.entry_trigger.bind('<Shift-Up>',   lambda e: self._bump_trigger(+0.10))
         self.entry_trigger.bind('<Shift-Down>', lambda e: self._bump_trigger(-0.10))
 
+        # --- NEW TRIGGER BUTTONS ---
+        self.btn_premarket = ttk.Button(self, text="P-Market", command=self._on_premarket_trigger, width=8, state="disabled")
+        self.btn_premarket.grid(row=1, column=6, padx=2)
+        self.btn_intraday = ttk.Button(self, text="Intraday", command=self._on_intraday_trigger, width=8, state="disabled")
+        self.btn_intraday.grid(row=1, column=7, padx=2)
+        # --- END NEW TRIGGER BUTTONS ---
+
         # --- Type + Order type ---
         self.var_type = tk.StringVar(value="CALL")
         ttk.Radiobutton(self, text="Call", variable=self.var_type, value="CALL").grid(row=1, column=2)
         ttk.Radiobutton(self, text="Put", variable=self.var_type, value="PUT").grid(row=1, column=3)
-        # When CALL/PUT changes, repopulate strikes if price known
+        # When CALL/PUT changes, repopulate strikes AND update model right
         self.var_type.trace_add("write", self._on_type_changed)
         self.var_use_25 = tk.BooleanVar(value=True)   # default ON
         chk_25 = ttk.Checkbutton(self, text="Use 2.5-step",
                                 variable=self.var_use_25,
                                 command=self._on_type_changed)
-        chk_25.grid(row=1, column=4, padx=6, sticky="w")
+        chk_25.grid(row=1, column=4, padx=6, sticky="w") # Shifting column 4 to new column 8 to avoid conflict
 
         # --- Order Type (fixed LMT) ---
-        ttk.Label(self, text="Type").grid(row=1, column=4)
-        ttk.Label(self, text="LMT", foreground="gray").grid(row=1, column=5)
+        ttk.Label(self, text="Type").grid(row=1, column=8) # Moved to column 8
+        ttk.Label(self, text="LMT", foreground="gray").grid(row=1, column=9) # Moved to column 9
 
         # --- Position Size ---
         ttk.Label(self, text="Position Size").grid(row=2, column=0)
@@ -282,9 +289,22 @@ class OrderFrame(tk.Frame):
 
     # ---------- helpers ----------
 
+    def _update_model_right(self, *args):
+        """Synchronize self.model._right with the selected radio button (CALL/PUT)."""
+        if not self.model:
+            return
+        
+        right = self.var_type.get()
+        if right in ("CALL", "PUT"):
+            self.model._right = right[0].upper() # Set to "C" or "P"
+            logging.info(f"AppModel[{self.current_symbol}]: Option right updated to {self.model._right}")
+
     def _on_type_changed(self, *args):
-        """Repopulate strikes when CALL/PUT toggled."""
+        """Repopulate strikes when CALL/PUT toggled AND update model right."""
         try:
+            # 🎯 FIX: Update model right immediately
+            self._update_model_right()
+            
             if not self.model:
                 return
             price = self.model.refresh_market_price()
@@ -382,16 +402,77 @@ class OrderFrame(tk.Frame):
         except Exception as e:
             logging.error(f"[OrderFrame] Finalization check error: {e}")
 
+    # ---------- handlers for new buttons ----------
+
+    def _on_premarket_trigger(self):
+        if not self.model or not self.current_symbol:
+            self._set_status("Error: No symbol selected or model", "red")
+            return
+        
+        self._set_status("Fetching pre-market data...", "orange")
+        def worker():
+            try:
+                # 1. Price logic
+                price = self.model.get_premarket_trigger_price() 
+                
+                # 2. UI update (thread-safe)
+                def apply():
+                    if price is not None and price > 0:
+                        self.entry_trigger.delete(0, tk.END)
+                        self.entry_trigger.insert(0, f"{price:.2f}")
+                        self._set_status(f"Trigger set to P-Market {self.model._right} @ {price:.2f}", "blue")
+                    else:
+                        self._set_status("Error: Could not retrieve valid pre-market price.", "red")
+                self._ui(apply)
+            except Exception as e:
+                logging.error(f"P-Market trigger error: {e}")
+                self._ui(lambda: self._set_status(f"P-Market trigger failed: {e}", "red"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_intraday_trigger(self):
+        if not self.model or not self.current_symbol:
+            self._set_status("Error: No symbol selected or model", "red")
+            return
+            
+        self._set_status("Fetching intraday data...", "orange")
+        def worker():
+            try:
+                # 1. Price logic
+                price = self.model.get_intraday_trigger_price() 
+                
+                # 2. UI update (thread-safe)
+                def apply():
+                    if price is not None and price > 0:
+                        self.entry_trigger.delete(0, tk.END)
+                        self.entry_trigger.insert(0, f"{price:.2f}")
+                        self._set_status(f"Trigger set to Intraday {self.model._right} @ {price:.2f}", "blue")
+                    else:
+                        self._set_status("Error: Could not retrieve valid intraday price (HOD/LOD).", "red")
+                self._ui(apply)
+            except Exception as e:
+                logging.error(f"Intraday trigger error: {e}")
+                self._ui(lambda: self._set_status(f"Intraday trigger failed: {e}", "red"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     # ---------- events ----------
     def on_symbol_selected(self, symbol: str):
         self.current_symbol = symbol
         self.model = get_model(symbol)
-        self.model._right = "C" if self.var_type.get() == "CALL" else "P"
+        
+        # 🎯 FIX: Call the centralized update function instead of setting _right directly
+        self._update_model_right() 
+        
         self._symbol_token += 1
         token = self._symbol_token
         self.model.set_status_callback(self._set_status)
         self._set_status(f"Ready: {symbol}", "blue")
         self.btn_save.config(state="normal")
+        # Enable new trigger buttons
+        self.btn_premarket.config(state="normal")
+        self.btn_intraday.config(state="normal")
+
 
         # price + prefill trigger + quantity off-thread
         def price_worker():
@@ -548,6 +629,8 @@ class OrderFrame(tk.Frame):
         self.entry_tp.delete(0, tk.END)
         self._set_status("Select symbol to start", "gray")
         self.btn_save.config(state="disabled")
+        self.btn_premarket.config(state="disabled")
+        self.btn_intraday.config(state="disabled")
 
     def _on_order_finalized(self):
         """Enable manual actions when backend finalizes order"""
@@ -676,4 +759,3 @@ class OrderFrame(tk.Frame):
                 logging.error(f"[OrderFrame.deserialize] Model restore failed: {e}")
 
         return frame, consumed
-
