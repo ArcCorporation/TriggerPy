@@ -111,6 +111,32 @@ class GeneralApp:
                 order_manager.add_finalized_order(model.order)
                 logging.info(f"[GeneralApp.load()] Reattached finalized order {model.order.order_id}")
 
+    def get_market_data_for_trigger(self, symbol: str, day: str) -> Optional[Dict]:
+        """
+        Wrapper around polygon.get_snapshot to retrieve high/low data.
+        Day can be 'intraday' (today) or 'premarket' (using prevDay as proxy).
+        Returns {'high', 'low'} or None.
+        """
+        if not self._polygon:
+            raise RuntimeError("GeneralApp: Polygon not connected")
+        
+        snapshot = self._polygon.get_snapshot(symbol)
+        if not snapshot:
+            return None
+        
+        if day == 'intraday':
+            # Use today's HOD/LOD
+            return {
+                'high': snapshot.get('today_high'),
+                'low': snapshot.get('today_low')
+            }
+        elif day == 'premarket':
+            # Use prevDay high/low as a simple proxy for premarket range
+            return {
+                'high': snapshot.get('prev_high'),
+                'low': snapshot.get('prev_low')
+            }
+        return None
 
     def add_model(self, model: "AppModel"):
         self._models.add(model)
@@ -262,6 +288,50 @@ class AppModel:
     # ------------------------------------------------------------------
 
     
+    def get_premarket_trigger_price(self) -> Optional[float]:
+        """
+        🎯 Gets Premarket High (for CALL) or Premarket Low (for PUT) using
+        the previous day's high/low as a proxy.
+        """
+        if not self._right:
+            logging.warning(f"AppModel[{self._symbol}]: Right (C/P) not set for premarket trigger.")
+            return None
+        
+        # Use the wrapper defined in GeneralApp
+        market_data = general_app.get_market_data_for_trigger(self._symbol, 'premarket')
+        
+        if not market_data:
+            return None
+            
+        if self._right == "C":
+            # CALL: Trigger price should be Premarket High
+            return market_data.get('high')
+        elif self._right == "P":
+            # PUT: Trigger price should be Premarket Low
+            return market_data.get('low')
+        return None
+
+    def get_intraday_trigger_price(self) -> Optional[float]:
+        """
+        🎯 Gets Today's High of Day (HOD) (for CALL) or Low of Day (LOD) (for PUT).
+        """
+        if not self._right:
+            logging.warning(f"AppModel[{self._symbol}]: Right (C/P) not set for intraday trigger.")
+            return None
+        
+        # Use the wrapper defined in GeneralApp
+        market_data = general_app.get_market_data_for_trigger(self._symbol, 'intraday')
+        
+        if not market_data:
+            return None
+            
+        if self._right == "C":
+            # CALL: Trigger price should be Today's High (HOD)
+            return market_data.get('high')
+        elif self._right == "P":
+            # PUT: Trigger price should be Today's Low (LOD)
+            return market_data.get('low')
+        return None
 
     @property
     def symbol(self) -> str:

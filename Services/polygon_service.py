@@ -174,6 +174,10 @@ class PolygonService:
             return None
 
     def get_snapshot(self, symbol: str):
+        """
+        Fetches a comprehensive snapshot, including today's high/low.
+        Returns {'last', 'bid', 'ask', 'today_high', 'today_low', 'prev_high', 'prev_low'} or None.
+        """
         url = f"{self.base_url}/v2/snapshot/locale/us/markets/stocks/tickers/{symbol.upper()}"
         params = {"apiKey": self.api_key}
         try:
@@ -181,10 +185,24 @@ class PolygonService:
             resp.raise_for_status()
             data = resp.json()
             ticker = data.get("ticker", {})
+            
+            # Extract key price points
+            last_trade = ticker.get("lastTrade", {})
+            last_quote = ticker.get("lastQuote", {})
+            today_data = ticker.get("todaysChange", {})
+            prev_data = ticker.get("prevDay", {})
+
+            # Prepare the comprehensive return dict
             return {
-                "last": ticker.get("lastTrade", {}).get("p"),
-                "bid": ticker.get("lastQuote", {}).get("bp"),
-                "ask": ticker.get("lastQuote", {}).get("ap"),
+                "last": last_trade.get("p"),
+                "bid": last_quote.get("bp"),
+                "ask": last_quote.get("ap"),
+                # Today's high/low
+                "today_high": today_data.get("high"),
+                "today_low": today_data.get("low"),
+                # Previous day's high/low (useful for proxying pre-market)
+                "prev_high": prev_data.get("h"),
+                "prev_low": prev_data.get("l"),
             }
         except Exception as e:
             logging.error(f"[Polygon] get_snapshot failed: {e}")

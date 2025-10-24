@@ -386,6 +386,7 @@ class OrderFrame(tk.Frame):
     def on_symbol_selected(self, symbol: str):
         self.current_symbol = symbol
         self.model = get_model(symbol)
+        self.model._right = "C" if self.var_type.get() == "CALL" else "P"
         self._symbol_token += 1
         token = self._symbol_token
         self.model.set_status_callback(self._set_status)
