@@ -19,7 +19,8 @@ Services/__pycache__/polygon_service.cpython-313.pyc
 __pycache__/
 *.py[cod]
 *$py.class
-
+.sqlite
+.vs
 # C extensions
 *.so
 *.pyd

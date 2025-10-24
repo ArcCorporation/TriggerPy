@@ -108,110 +108,145 @@ class OrderWaitService:
     def start_stop_loss_watcher(self, order: Order, stop_loss_price: float):
         """
         Start a dedicated thread to monitor stop-loss for an active order.
-        For CALL:  exit if price <= stop_loss_price
-        For PUT:   exit if price >= stop_loss_price
+        CALL : exit if price <= stop_loss_price
+        PUT  : exit if price >= stop_loss_price
+        Thread keeps polling until:
+            - order is no longer ACTIVE / PENDING
+            - global shutdown flag is set
+            - successful market sell is submitted
+        Transient problems (no conId, no premium, no position) are throttled-logged
+        and the loop continues.
         """
         order_id = order.order_id
 
-        # Register ThreadInfo
-        tinfo = ThreadInfo(order_id, order.symbol, watcher_type="stop_loss", mode="poll", stop_loss=stop_loss_price)
+        tinfo = ThreadInfo(order_id, order.symbol,
+                         watcher_type="stop_loss",
+                         mode="poll",
+                         stop_loss=stop_loss_price)
         watcher_info.add_watcher(tinfo)
         tinfo.update_status(STATUS_RUNNING)
 
+        # ---------------- inner thread ----------------
         def _stop_loss_thread():
-            last_print = 0
-            delay = 5
+            last_print   = 0
+            delay        = 5
+            warn_times   = {"contract": 0, "premium": 0, "position": 0}
+
+            logging.info(
+                f"[StopLoss] Watching {order.symbol} stop-loss @ {stop_loss_price}  ({order.right})")
             try:
-                logging.info(f"[StopLoss] Watching {order.symbol} stop-loss @ {stop_loss_price}  ({order.right})")
+
                 while runtime_man.is_run():
+                    # 1. order still alive?
                     if order.state not in (OrderState.ACTIVE, OrderState.PENDING):
-                        logging.info(f"[StopLoss] Order {order.order_id} no longer active, stopping watcher.")
+                        logging.info(
+                            f"[StopLoss] Order {order.order_id} no longer active – stopping watcher.")
                         tinfo.update_status(STATUS_CANCELLED)
                         return
 
+                    # 2. market data
                     snap = self.polygon.get_snapshot(order.symbol)
                     if not snap:
                         time.sleep(self.poll_interval)
+                        logging.warning(f"[StopLoss] BEWARE NO SNAP FOR {order.symbol}")
                         continue
+
                     now = time.time()
                     last_price = snap.get("last")
                     if now - last_print >= delay:
-                        logging.info(f"[StopLoss] Poll {order.symbol} → {last_price}, stop={stop_loss_price}")
+                        logging.info(
+                            f"[StopLoss] Poll {order.symbol} → {last_price}, stop={stop_loss_price}")
                         last_print = now
-
                     if last_price:
                         tinfo.update_status(STATUS_RUNNING, last_price=last_price)
 
-                    # ----- right-aware trigger -----
-                    if order.right in ("P", "PUT"):
-                        triggered = last_price >= stop_loss_price   # PUT: rise = loss
-                    else:
-                        triggered = last_price <= stop_loss_price   # CALL: fall = loss
-                    # --------------------------------
+                    # 3. trigger logic
+                    triggered = (last_price >= stop_loss_price) if order.right in ("P", "PUT") \
+                            else (last_price <= stop_loss_price)
 
-                    # --- pre-resolve contract so every downstream IB call is safe ---
+                    # 4. contract resolution (throttled)
                     contract = self.tws.create_option_contract(
                         order.symbol, order.expiry, order.strike, order.right)
                     conid = self.tws.resolve_conid(contract)
                     if not conid:
-                        tinfo.update_status(STATUS_FAILED, info={"error":"bad contract"})
-                        return
-                    contract.conId = conid          # stash it for re-use
+                        if now - warn_times["contract"] >= 30:
+                            logging.warning(
+                                f"[StopLoss] still no conId for {order.symbol} "
+                                f"{order.expiry} {order.strike}{order.right} – will keep trying")
+                            warn_times["contract"] = now
+                        time.sleep(self.poll_interval)
+                        continue
+                    contract.conId = conid
+                    warn_times["contract"] = 0
+
+                    # 5. premium fetch (throttled)
                     premium = self.tws.get_option_premium(
-                        order.symbol, order.expiry, order.strike, order.right
-                    )
+                        order.symbol, order.expiry, order.strike, order.right)
                     if premium is None or premium <= 0:
-                        pos = self.tws.get_position_by_order_id(order.previous_id)
-                        premium = pos and pos.get("avg_price") or None
+                        pos_fallback = self.tws.get_position_by_order_id(order.previous_id)
+                        premium = pos_fallback and pos_fallback.get("avg_price") or None
                         if premium is None:
-                            tinfo.update_status(STATUS_FAILED, info={"error":"no premium"})
-                            return   # kill thread cleanly
+                            if now - warn_times["premium"] >= 30:
+                                logging.warning(
+                                    f"[StopLoss] no premium for {order.symbol} "
+                                    f"{order.expiry} {order.strike}{order.right} – will keep trying")
+                                warn_times["premium"] = now
+                            time.sleep(self.poll_interval)
+                            continue
+                    warn_times["premium"] = 0
 
+                    # 6. position check (throttled)
+                    pos = self.tws.get_position_by_order_id(order.previous_id)
+                    if not pos or pos.get("qty", 0) <= 0:
+                        if now - warn_times["position"] >= 30:
+                            logging.warning(
+                                f"[StopLoss] no live position for {order.previous_id} – will keep watching")
+                            warn_times["position"] = now
+                        time.sleep(self.poll_interval)
+                        continue
+                    warn_times["position"] = 0
 
+                    # 7. exit when triggered
                     if triggered:
                         try:
-                            logging.info(f"[StopLoss] triggered {order.symbol} {last_price} {stop_loss_price}")
-                            
-                            # --- Removed risky Limit Price calculation. Order is now MKT. ---
-
-                            pos = self.tws.get_position_by_order_id(order.previous_id)
-                            if not pos or pos.get("qty", 0) <= 0:
-                                logging.warning(f"[StopLoss] No live position for {order.previous_id}, cannot exit.")
-                                tinfo.update_status(STATUS_FAILED, info={"error": "No position"})
-                                return
-
+                            logging.info(
+                                f"[StopLoss] triggered {order.symbol} "
+                                f"{last_price} vs {stop_loss_price}")
                             live_qty = int(pos["qty"])
                             success = self.tws.sell_position_by_order_id(
                                 order.previous_id,
                                 contract,
                                 qty=live_qty,
-                                limit_price=None, # Market order, so no limit price
+                                limit_price=None,      # market order
                                 ex_order=order
-
                             )
                             if success:
-                                logging.info(f"[StopLoss] Sold {live_qty} {order.symbol} via TWS position map - MKT Exit")
+                                logging.info(
+                                    f"[StopLoss] Sold {live_qty} {order.symbol} "
+                                    "via TWS position map – MKT Exit")
                                 order.mark_finalized(f"Stop-loss triggered @ {last_price}")
                                 tinfo.update_status(STATUS_FINALIZED, last_price=last_price)
                             else:
-                                logging.error(f"[StopLoss] TWS refused stop-loss sell for {order.order_id}")
-                                tinfo.update_status(STATUS_FAILED, last_price=last_price)
-                       
-                            
-                            
+                                logging.error(
+                                    f"[StopLoss] TWS refused stop-loss sell for {order.order_id} – will retry")
+                                # loop continues
                         except Exception as e:
-                            logging.error(f"[StopLoss] Exception in stop-loss for {order.order_id}: {e}")
-                            tinfo.update_status(STATUS_FAILED, info={"error": str(e)})
-                        return
+                            logging.exception(
+                                f"[StopLoss] Exception in stop-loss for {order.order_id}: {e}")
+                            # loop continues
+                        return          # leave only after we successfully submitted the exit order
 
                     time.sleep(self.poll_interval)
-            except Exception as e:
-                tinfo.update_status(STATUS_FAILED, info={"error": str(e)})
 
-        # Spawn the stop-loss thread
+            # outer safety net – should rarely be hit
+            except Exception as e:
+                logging.exception(f"[StopLoss] Outer exception in stop-loss watcher: {e}")
+        # ----------------------------------------------
+
         t = threading.Thread(target=_stop_loss_thread, daemon=True)
         t.start()
         return t
+
 
     def add_order(self, order: Order, mode: str = "ws") -> str:
         """
