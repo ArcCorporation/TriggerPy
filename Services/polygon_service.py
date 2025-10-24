@@ -86,67 +86,65 @@ class PolygonService:
 
     def _get_option_from_chain(self, underlying: str, expiry: str, strike: float, right: str):
         """
-        Fallback: Pull full chain snapshot and filter the target contract.
-        Now with fuzzy expiry/strike matching for Polygon consistency.
+        Fallback: scan full chain with wider tolerance and debug logs.
         """
         try:
-            url = f"{self.base_url}/v3/snapshot/options/{underlying.upper()}"
+            url  = f"{self.base_url}/v3/snapshot/options/{underlying.upper()}"
             params = {"apiKey": self.api_key}
             resp = requests.get(url, params=params, timeout=8)
             resp.raise_for_status()
 
             results = resp.json().get("results", [])
-            if not isinstance(results, list) or len(results) == 0:
-                logging.error(f"[Polygon] Chain snapshot empty for {underlying}")
+            if not results:
+                logging.warning("[Polygon] Chain returned zero contracts for %s", underlying)
                 return None
 
-            target_year = expiry[:4]
+            target_year  = expiry[:4]
             target_month = expiry[4:6]
-            target_day = expiry[6:8]
-            right = right.upper()
-            best_match = None
-            best_diff = 999
+            target_day   = int(expiry[6:8])
+            right        = right.upper()[0]
+            best_match   = None
+            best_diff    = 999.
 
             for item in results:
                 details = item.get("details", {})
                 if not details:
                     continue
+                exp  = details.get("expiration_date", "")
+                str_strike = details.get("strike_price")
+                ctype  = details.get("contract_type", "").upper()
 
-                exp = details.get("expiration_date", "")
-                strike_price = details.get("strike_price")
-                ctype = details.get("contract_type", "").lower()
-
-                if not exp or strike_price is None or not ctype:
+                if not exp or str_strike is None or not ctype:
                     continue
 
                 exp_y, exp_m, exp_d = exp.split("-")
                 if exp_y != target_year or exp_m != target_month:
                     continue
 
-                # Allow +/- 7 days tolerance (weekly misalignment)
-                day_diff = abs(int(exp_d) - int(target_day))
-                if day_diff > 7:
+                # ±14 calendar days
+                if abs(int(exp_d) - target_day) > 14:
                     continue
 
-                # Compare contract type (first letter enough)
-                if ctype[0].upper() != right[0]:
+                if ctype[0] != right:
                     continue
 
-                # Compare strike closeness
-                diff = abs(float(strike_price) - float(strike))
+                # 3-decimal strike tolerance
+                diff = abs(round(float(str_strike), 3) - round(float(strike), 3))
                 if diff < best_diff:
                     best_diff = diff
                     best_match = item
 
             if not best_match:
-                logging.error(f"[Polygon] Contract not found in chain for {underlying} {expiry} {strike}{right}")
+                logging.error("[Polygon] No matching contract in chain for %s %s %s%s",
+                            underlying, expiry, strike, right)
                 return None
 
             quote = best_match.get("last_quote", {})
             trade = best_match.get("last_trade", {})
-            bid, ask, last = quote.get("bid"), quote.get("ask"), trade.get("price")
-            mid = (bid + ask) / 2 if bid and ask else None
-
+            bid   = quote.get("bid")
+            ask   = quote.get("ask")
+            last  = trade.get("price")
+            mid   = (bid + ask) / 2 if (bid and ask) else last
             details = best_match.get("details", {})
             return {
                 "symbol": details.get("ticker"),
@@ -154,12 +152,13 @@ class PolygonService:
                 "ask": ask,
                 "last": last,
                 "mid": mid,
-                "updated": best_match.get("updated", None),
+                "updated": best_match.get("updated"),
             }
 
         except Exception as e:
-            logging.error(f"[Polygon] _get_option_from_chain failed: {e}")
+            logging.error("[Polygon] _get_option_from_chain failed: %s", e)
             return None
+
 
     def get_last_trade(self, symbol: str):
         url = f"{self.base_url}/v2/last/trade/{symbol.upper()}"
@@ -174,39 +173,36 @@ class PolygonService:
             return None
 
     def get_snapshot(self, symbol: str):
-        """
-        Fetches a comprehensive snapshot, including today's high/low.
-        Returns {'last', 'bid', 'ask', 'today_high', 'today_low', 'prev_high', 'prev_low'} or None.
-        """
         url = f"{self.base_url}/v2/snapshot/locale/us/markets/stocks/tickers/{symbol.upper()}"
         params = {"apiKey": self.api_key}
         try:
             resp = requests.get(url, params=params, timeout=5)
             resp.raise_for_status()
-            data = resp.json()
-            ticker = data.get("ticker", {})
-            
-            # Extract key price points
-            last_trade = ticker.get("lastTrade", {})
-            last_quote = ticker.get("lastQuote", {})
-            today_data = ticker.get("todaysChange", {})
-            prev_data = ticker.get("prevDay", {})
+            payload = resp.json()
 
-            # Prepare the comprehensive return dict
+            ticker_node = payload.get("ticker")
+            if not isinstance(ticker_node, dict):
+                logging.warning("[Polygon] snapshot 'ticker' node is not a dict (%s)", type(ticker_node))
+                return None
+            logging.info(f"ticker_node:{ticker_node}")
+            last_trade = ticker_node.get("lastTrade", {})
+            last_quote = ticker_node.get("lastQuote", {})
+            today_bar  = ticker_node.get("day", {})
+            prev_bar   = ticker_node.get("prevDay", {})
+
             return {
-                "last": last_trade.get("p"),
-                "bid": last_quote.get("bp"),
-                "ask": last_quote.get("ap"),
-                # Today's high/low
-                "today_high": today_data.get("high"),
-                "today_low": today_data.get("low"),
-                # Previous day's high/low (useful for proxying pre-market)
-                "prev_high": prev_data.get("h"),
-                "prev_low": prev_data.get("l"),
+                "last":       last_trade.get("p"),
+                "bid":        last_quote.get("p"),   # best bid price
+                "ask":        last_quote.get("P"),   # best ask price
+                "today_high": today_bar.get("h"),
+                "today_low":  today_bar.get("l"),
+                "prev_high":  prev_bar.get("h"),
+                "prev_low":   prev_bar.get("l"),
             }
         except Exception as e:
-            logging.error(f"[Polygon] get_snapshot failed: {e}")
+            logging.error("[Polygon] get_snapshot failed: %s", e)
             return None
+
 
     # ---------------- WS METHODS ----------------
     def subscribe(self, symbol: str, callback):
