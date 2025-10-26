@@ -1,7 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from typing import Callable, Dict, List
-
+import logging
 class ThreadedCallbackService:
     def __init__(self, max_workers: int = 5):
         self._callbacks: Dict[str, List[Callable[[float], None]]] = {}
@@ -23,8 +23,8 @@ class ThreadedCallbackService:
                     self._callbacks[symbol].remove(callback)
                     if not self._callbacks[symbol]:
                         del self._callbacks[symbol]
-                except ValueError:
-                    pass
+                except ValueError as e:
+                    logging.error(f"[Callback Error] {symbol}: {e}")
 
     def trigger(self, symbol: str, value: float):
         """Submit all callbacks to worker threads."""
@@ -38,7 +38,7 @@ class ThreadedCallbackService:
         try:
             cb(value)
         except Exception as e:
-            print(f"[Callback Error] {cb.__name__}: {e}")
+            logging.error(f"[Callback Error] {cb.__name__}: {e}")
 
     def clear_symbol(self, symbol: str):
         with self._lock:
