@@ -1,12 +1,13 @@
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from typing import Callable, Dict, List
+from Services.thread_pool import CustomThreadPool
 import logging
 class ThreadedCallbackService:
     def __init__(self, max_workers: int = 5):
         self._callbacks: Dict[str, List[Callable[[float], None]]] = {}
         self._lock = Lock()
-        self._executor = ThreadPoolExecutor(max_workers=max_workers)
+        self._executor = CustomThreadPool(max_workers=max_workers)
 
     def add_callback(self, symbol: str, callback: Callable[[float], None]):
         """Register a callback for a given symbol."""

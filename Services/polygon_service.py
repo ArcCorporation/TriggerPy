@@ -190,7 +190,7 @@ class PolygonService:
             if not isinstance(ticker_node, dict):
                 logging.warning("[Polygon] snapshot 'ticker' node is not a dict (%s)", type(ticker_node))
                 return None
-            logging.info(f"ticker_node:{ticker_node}")
+            #logging.info(f"ticker_node:{ticker_node}")
             last_trade = ticker_node.get("lastTrade", {})
             last_quote = ticker_node.get("lastQuote", {})
             today_bar  = ticker_node.get("day", {})
