@@ -17,7 +17,8 @@ class OrderWaitService:
     def __init__(self, polygon_service: PolygonService, tws_service: TWSService, poll_interval=0.1):
         self.polygon = polygon_service
         self.tws = tws_service
-
+        self.trigger_lock = threading.Lock()
+        self.trigger_status = set()
         # Active pending orders, keyed by order_id
         self.pending_orders = {}
         # 💡 NEW: Storage for active stop-loss orders being monitored by WS
@@ -406,24 +407,26 @@ class OrderWaitService:
         if tinfo := watcher_info.get_watcher(order_id):
             tinfo.update_status(STATUS_RUNNING, last_price=price)
 
-        if order.is_triggered(price):
-            logging.info(f"[WaitService-WS] TRIGGERED! {order.symbol} @ {price}, trigger={order.trigger}")
-            
-            # --- Finalize ---
-            # Note: tinfo is None, _finalize_order will find it
-            self._finalize_order(order_id, order, tinfo=None, last_price=price)
-            
-            # --- Unsubscribe and cleanup ---
-            callback_func = self._ws_callbacks.pop(order_id, None)
-            if callback_func:
-                try:
-                    self.polygon.unsubscribe(order.symbol, callback_func)
-                except Exception as e:
-                    logging.debug(f"[WaitService-WS] Unsubscribe ignored for {order.symbol}: {e}")
+        with self.trigger_lock:
+            if order.is_triggered(price) and  order not in self.trigger_status:
+                self.trigger_status.add(order)
+                logging.info(f"[WaitService-WS] TRIGGERED! {order.symbol} @ {price}, trigger={order.trigger}")
+                
+                # --- Finalize ---
+                # Note: tinfo is None, _finalize_order will find it
+                self._finalize_order(order_id, order, tinfo=None, last_price=price)
+                
+                # --- Unsubscribe and cleanup ---
+                callback_func = self._ws_callbacks.pop(order_id, None)
+                if callback_func:
+                    try:
+                        self.polygon.unsubscribe(order.symbol, callback_func)
+                    except Exception as e:
+                        logging.debug(f"[WaitService-WS] Unsubscribe ignored for {order.symbol}: {e}")
 
-            with self.lock:
-                self.pending_orders.pop(order_id, None) # Remove from pending
-                self.cancelled_orders.add(order_id) # Add to prevent race conditions
+                with self.lock:
+                    self.pending_orders.pop(order_id, None) # Remove from pending
+                    self.cancelled_orders.add(order_id) # Add to prevent race conditions
 
     def _on_stop_loss_tick(self, order_id: str, price: float, stop_loss_level: float):
         """💡 NEW: Callback from PolygonService for live STOP-LOSS triggers."""
@@ -558,7 +561,7 @@ class OrderWaitService:
                                 f"stop={stop_loss_level} ({order.right})")
                         
                         # 💡 MODIFIED: Spawn watcher in "ws" mode
-                        self.start_stop_loss_watcher(ex_order, stop_loss_level, mode="ws")
+                        self.start_stop_loss_watcher(ex_order, stop_loss_level, mode="poll")
 
 
             else:

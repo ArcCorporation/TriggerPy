@@ -143,7 +143,7 @@ class GeneralApp:
 
 
     def add_order(self, order):
-        self.order_wait.add_order(order, mode="ws")
+        self.order_wait.add_order(order, mode="poll")
 
     def get_models(self):
         return list(self._models)
