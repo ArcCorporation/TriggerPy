@@ -25,6 +25,9 @@ class OrderWaitService:
         # Lock for thread-safety
         self.lock = threading.Lock()
 
+        # Storage for WS callbacks to allow proper unsubscription
+        self._ws_callbacks = {} # Dictionary to store {order_id: callback_function}
+
         # Polling interval for alternate mode (seconds), e.g. 0.1s = 100ms
         self.poll_interval = poll_interval
 
@@ -61,7 +64,6 @@ class OrderWaitService:
 
                 if last_price and order.is_triggered(last_price):
                     self._finalize_order(order_id, order, tinfo, last_price)
-                    # tinfo.update_status(STATUS_FINALIZED, last_price=last_price) # Updated inside _finalize_order
                     with self.lock:
                         if order_id in self.pending_orders:
                             del self.pending_orders[order_id]
@@ -71,7 +73,7 @@ class OrderWaitService:
         except Exception as e:
             tinfo.update_status(STATUS_FAILED, info={"error": str(e)})
 
-    def start_trigger_watcher(self, order: Order, mode: str = "poll") -> threading.Thread:
+    def start_trigger_watcher(self, order: Order, mode: str = "ws") -> threading.Thread:
         """
         Start a dedicated thread (or ws subscription) to watch trigger price for an order.
         When trigger condition is met, finalize order via TWS.
@@ -84,44 +86,81 @@ class OrderWaitService:
         tinfo.update_status(STATUS_RUNNING)
 
         if mode == "ws":
-            # Original WS path
+            # Define the callback function and store it for unsubscription
+            callback_func = lambda price, oid=order_id: self._on_tick(oid, price)
+            self._ws_callbacks[order_id] = callback_func # Store it
+
             self.polygon.subscribe(
                 order.symbol,
-                lambda price, oid=order_id: self._on_tick(oid, price)
+                callback_func # Pass the stored function
             )
-            logging.info(f"[TriggerWatcher] Started WS watcher for {order.symbol} (order {order_id})")
+            logging.info(f"[TriggerWatcher] Started WS watcher for {order.symbol} (order {order_id}) - WS mode.")
             return None  # no thread object for ws
 
         elif mode == "poll":
             # Old-school polling thread path
             t = threading.Thread(
-                target=self._poll_snapshot_thread, # Calling the new private method
+                target=self._poll_snapshot_thread, 
                 args=(order_id, order, tinfo),
                 daemon=True
             )
             t.start()
-            logging.info(f"[TriggerWatcher] Started polling watcher for {order.symbol} (order {order_id})")
+            logging.info(f"[TriggerWatcher] Started polling watcher for {order.symbol} (order {order_id}) - Poll mode.")
             return t
 
         else:
             logging.warning(f"[TriggerWatcher] Unknown mode '{mode}', defaulting to 'ws'")
+            # Fallback path must also store the callback
+            callback_func = lambda price, oid=order_id: self._on_tick(oid, price)
+            self._ws_callbacks[order_id] = callback_func
             self.polygon.subscribe(
                 order.symbol,
-                lambda price, oid=order_id: self._on_tick(oid, price)
+                callback_func
             )
             return None
+
+    def _finalize_exit_order(self, exit_order: Order, tinfo: ThreadInfo, last_price: float, live_qty: int, contract):
+        """
+        Sends the stop-loss order to TWS and handles cleanup and status updates.
+        This is the consolidated logic from the old _stop_loss_thread.
+        """
+        order_id = exit_order.order_id
+        
+        try:
+            logging.info(f"[StopLoss] Submitting MKT exit order for {exit_order.symbol} at {last_price}...")
+            
+            success = self.tws.sell_position_by_order_id(
+                exit_order.previous_id,
+                contract,
+                qty=live_qty,
+                limit_price=None,      # market order
+                ex_order=exit_order
+            )
+
+            if success:
+                logging.info(
+                    f"[StopLoss] Sold {live_qty} {exit_order.symbol} "
+                    f"via TWS position map – MKT Exit. Watcher finalized."
+                )
+                # ✅ RE-ADDED CRITICAL FINALIZATION LOGIC
+                exit_order.mark_finalized(f"Stop-loss triggered @ {last_price}") 
+                tinfo.update_status(STATUS_FINALIZED, last_price=last_price)
+                return True
+            else:
+                logging.error(f"[StopLoss] TWS refused stop-loss sell for {order_id} – will retry/fail.")
+                # We return False so the while loop in _stop_loss_thread can decide to retry or fail.
+                return False 
+
+        except Exception as e:
+            logging.exception(f"[StopLoss] Exception in finalize exit for {order_id}: {e}")
+            exit_order.mark_failed(str(e))
+            tinfo.update_status(STATUS_FAILED, last_price=last_price, info={"error": str(e)})
+            return False
+
 
     def start_stop_loss_watcher(self, order: Order, stop_loss_price: float):
         """
         Start a dedicated thread to monitor stop-loss for an active order.
-        CALL : exit if price <= stop_loss_price
-        PUT  : exit if price >= stop_loss_price
-        Thread keeps polling until:
-            - order is no longer ACTIVE / PENDING
-            - global shutdown flag is set
-            - successful market sell is submitted
-        Transient problems (no conId, no premium, no position) are throttled-logged
-        and the loop continues.
         """
         order_id = order.order_id
 
@@ -214,39 +253,26 @@ class OrderWaitService:
 
                     # 7. exit when triggered
                     if triggered:
-                        try:
-                            logging.info(
-                                f"[StopLoss] triggered {order.symbol} "
-                                f"{last_price} vs {stop_loss_price}")
-                            live_qty = int(pos["qty"])
-                            success = self.tws.sell_position_by_order_id(
-                                order.previous_id,
-                                contract,
-                                qty=live_qty,
-                                limit_price=None,      # market order
-                                ex_order=order
-                            )
-                            if success:
-                                logging.info(
-                                    f"[StopLoss] Sold {live_qty} {order.symbol} "
-                                    "via TWS position map – MKT Exit")
-                                order.mark_finalized(f"Stop-loss triggered @ {last_price}")
-                                tinfo.update_status(STATUS_FINALIZED, last_price=last_price)
-                            else:
-                                logging.error(
-                                    f"[StopLoss] TWS refused stop-loss sell for {order.order_id} – will retry")
-                                # loop continues
-                        except Exception as e:
-                            logging.exception(
-                                f"[StopLoss] Exception in stop-loss for {order.order_id}: {e}")
-                            # loop continues
-                        return          # leave only after we successfully submitted the exit order
+                        logging.info(
+                            f"[StopLoss] TRIGGERED! {order.symbol} "
+                            f"Price {last_price} vs Stop {stop_loss_price}"
+                        )
+                        live_qty = int(pos["qty"])
+                        
+                        # 🎯 FIX: Call the new dedicated exit finalizer
+                        success = self._finalize_exit_order(order, tinfo, last_price, live_qty, contract)
+
+                        if success:
+                             # If successful, we exit the thread loop.
+                            return
+                        # If not successful, the loop continues to retry/fail based on the TWS result.
 
                     time.sleep(self.poll_interval)
 
             # outer safety net – should rarely be hit
             except Exception as e:
                 logging.exception(f"[StopLoss] Outer exception in stop-loss watcher: {e}")
+                tinfo.update_status(STATUS_FAILED, info={"error": str(e)})
         # ----------------------------------------------
 
         t = threading.Thread(target=_stop_loss_thread, daemon=True)
@@ -271,14 +297,18 @@ class OrderWaitService:
                 f"[WaitService] 🚨 TRIGGER ALREADY MET! Executing immediately. "
                 f"Current: {current_price}, Trigger: {order.trigger}"
             )
-            self._finalize_order(order_id, order, tinfo=None, last_price=current_price) # Pass price for logging
+            self._finalize_order(order_id, order, tinfo=None, last_price=current_price) 
             return order_id
 
         # Subscribe / start poller only if trigger not already met
         if mode == "ws":
+            # Define the callback function and store it for unsubscription
+            callback_func = lambda price, oid=order_id: self._on_tick(oid, price)
+            self._ws_callbacks[order_id] = callback_func # Store it
+
             self.polygon.subscribe(
                 order.symbol,
-                lambda price, oid=order_id: self._on_tick(oid, price)
+                callback_func
             )
         else:
             self.start_trigger_watcher(order, mode)
@@ -299,11 +329,18 @@ class OrderWaitService:
                 self.cancelled_orders.add(order_id)
                 del self.pending_orders[order_id]
 
-                try:
-                    self.polygon.unsubscribe(order.symbol)
-                except Exception as e:
-                    logging.debug(f"[WaitService] Unsubscribe ignored for {order.symbol}: {e}")
-
+                # Retrieve and pass the callback function to the new unsubscribe
+                callback_func = self._ws_callbacks.pop(order_id, None) 
+                
+                if callback_func:
+                    try:
+                        # Call the new unsubscribe signature
+                        self.polygon.unsubscribe(order.symbol, callback_func) 
+                    except Exception as e:
+                        logging.debug(f"[WaitService] Unsubscribe ignored for {order.symbol}: {e}")
+                else:
+                    logging.debug(f"[WaitService] No WS callback found for order {order_id}.")
+                
                 msg = f"[WaitService] Order cancelled {order_id}"
                 logging.info(msg)
 
@@ -322,16 +359,15 @@ class OrderWaitService:
         logging.info(msg)
 
         if order.is_triggered(price):
-            # NOTE: We can't get tinfo here, as the WS path doesn't return a thread
-            # or Tinfo object. We'll update Tinfo manually if one exists,
-            # but for simplicity, we pass None for tinfo and the price for last_price
-            # to _finalize_order.
             self._finalize_order(order_id, order, tinfo=None, last_price=price) 
             
-            try:
-                self.polygon.unsubscribe(order.symbol)
-            except Exception as e:
-                logging.debug(f"[WaitService] Unsubscribe ignored for {order.symbol}: {e}")
+            # Unsubscribe logic is updated
+            callback_func = self._ws_callbacks.pop(order_id, None)
+            if callback_func:
+                try:
+                    self.polygon.unsubscribe(order.symbol, callback_func)
+                except Exception as e:
+                    logging.debug(f"[WaitService] Unsubscribe ignored for {order.symbol}: {e}")
 
             with self.lock:
                 if order_id in self.pending_orders:
@@ -339,7 +375,7 @@ class OrderWaitService:
 
   
     def _finalize_order(self, order_id: str, order: Order, tinfo: ThreadInfo, last_price):
-        """Sends the order to TWS using the new TWSService."""
+        """Sends the entry order to TWS and handles cleanup and status updates."""
         
         # Helper to update tinfo if it exists (for poll mode)
         def _update_tinfo_status(status):
@@ -352,7 +388,7 @@ class OrderWaitService:
 
         try:
             start_ts = time.time() * 1000
-            logging.info(f"[TWS-LATENCY] {order.symbol} Trigger hit → sending order "
+            logging.info(f"[TWS-LATENCY] {order.symbol} Trigger hit → sending ENTRY order "
                         f"({order.right}{order.strike}) at {start_ts:.0f} ms")
             success = self.tws.place_custom_order(order)
             if success:
@@ -379,7 +415,6 @@ class OrderWaitService:
                     else:
                         logging.warning(f"[WaitService] Order {order_id} not filled within timeout window.")
                         # Even if not filled, we mark the *watcher* as finalized if the order was sent
-                        # to prevent the polling thread from retrying (if applicable).
                         _update_tinfo_status(STATUS_FINALIZED) 
 
                 # ✅ if stop-loss configured, launch stop-loss watcher
@@ -395,17 +430,16 @@ class OrderWaitService:
                             tp_price=None,
                             sl_price=order.sl_price,
                             action="SELL",
-                            type="MKT", # <--- FIX: Use MKT for guaranteed stop-loss exit
+                            type="MKT", # Use MKT for guaranteed stop-loss exit
                             trigger=None
                         )
                         ex_order = exit_order.set_position_size(order._position_size) 
                         ex_order.previous_id = order.order_id
                         ex_order.mark_active()
-                        logging.info(f"[WAITSERVICE] Spawned exit order {ex_order.order_id} "
+                        logging.info(f"[WAITSERVICE] Spawned EXIT watcher {ex_order.order_id} "
                                 f"stop={stop_loss_level} ({order.right})")
                         
                         self.start_stop_loss_watcher(ex_order, stop_loss_level)
-                        #logging.info(f"BEWARE NOT LAUNCHING STOP LOSS")
 
 
             else:
