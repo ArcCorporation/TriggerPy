@@ -47,6 +47,10 @@ class ThreadedCallbackService:
     def list_symbols(self):
         with self._lock:
             return list(self._callbacks.keys())
+        
+    def shutdown(self, wait: bool = True):
+        logging.info("Shutting down callback executor")
+        self._executor.shutdown(wait=wait)
 
 
 callback_manager = ThreadedCallbackService()
