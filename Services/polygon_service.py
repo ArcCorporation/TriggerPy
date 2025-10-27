@@ -4,8 +4,10 @@ import json
 import threading
 import time
 import websocket
-from Services.enigma3 import  Enigma3Service
+from Services.enigma3 import Enigma3Service
 from Services.randomness import KEY
+# Import the new callback manager
+from Services.callback_manager import callback_manager, ThreadedCallbackService 
 
 
 class PolygonService:
@@ -18,10 +20,14 @@ class PolygonService:
         self.base_url = "https://api.polygon.io"
         self.ws_url = "wss://socket.polygon.io/stocks"
 
-        # WS için
-        self.subscriptions = {}
+        # WS için:
+        # ❌ self.subscriptions = {}  <-- REMOVED: Now managed by callback_manager
         self.ws = None
         self.ws_thread = None
+        # Track active WS subscriptions to avoid sending 'subscribe' message multiple times
+        self._active_ws_symbols = set() 
+        self._ws_lock = threading.Lock()
+
 
         # Background websocket start
         self._start_ws()
@@ -206,25 +212,54 @@ class PolygonService:
 
     # ---------------- WS METHODS ----------------
     def subscribe(self, symbol: str, callback):
-        """Belirli sembol için WS subscription başlat."""
-        self.subscriptions[symbol.upper()] = callback
+        """Register a callback and send WS subscription if it's the first for this symbol."""
+        sym = symbol.upper()
+        # 1. Add callback to manager
+        callback_manager.add_callback(sym, callback)
+        
+        # 2. Check if WS subscription is needed (thread-safe check)
+        with self._ws_lock:
+            if sym in self._active_ws_symbols:
+                logging.debug(f"[Polygon] Callback added for {sym}. WS subscription already active.")
+                return
+
+            # If not active, mark it and send WS message
+            self._active_ws_symbols.add(sym)
+        
         if self.ws:
-            msg = {"action": "subscribe", "params": f"T.{symbol.upper()}"}
+            msg = {"action": "subscribe", "params": f"T.{sym}"}
             try:
                 self.ws.send(json.dumps(msg))
+                logging.info(f"[Polygon] WS subscribed to T.{sym}")
             except Exception as e:
                 logging.error(f"[Polygon] WS subscribe error: {e}")
 
-    def unsubscribe(self, symbol: str):
+
+    def unsubscribe(self, symbol: str, callback):
+        """Remove a specific callback and send WS unsubscribe if it was the last."""
         sym = symbol.upper()
-        if sym in self.subscriptions:
-            del self.subscriptions[sym]
-        if self.ws:
-            msg = {"action": "unsubscribe", "params": f"T.{sym}"}
-            try:
-                self.ws.send(json.dumps(msg))
-            except Exception as e:
-                logging.error(f"[Polygon] WS unsubscribe error: {e}")
+
+        # 1. Remove callback from manager
+        callback_manager.remove_callback(sym, callback)
+
+        # 2. Check if WS unsubscription is needed (thread-safe check)
+        remaining_symbols = callback_manager.list_symbols()
+
+        with self._ws_lock:
+            # Check if symbol is still required by any other callback
+            if sym not in remaining_symbols and sym in self._active_ws_symbols:
+                self._active_ws_symbols.remove(sym)
+                
+                if self.ws:
+                    msg = {"action": "unsubscribe", "params": f"T.{sym}"}
+                    try:
+                        self.ws.send(json.dumps(msg))
+                        logging.info(f"[Polygon] WS unsubscribed from T.{sym}")
+                    except Exception as e:
+                        logging.error(f"[Polygon] WS unsubscribe error: {e}")
+            elif sym in self._active_ws_symbols:
+                 logging.debug(f"[Polygon] Callback removed for {sym}. WS subscription remains active.")
+
 
     def _start_ws(self):
         """Background thread ile WS başlat."""
@@ -251,16 +286,29 @@ class PolygonService:
         ws.send(json.dumps(auth_msg))
         logging.info("[Polygon] WS connected & authenticated")
 
+        # After re-authentication, resubscribe to all symbols
+        with self._ws_lock:
+            for sym in self._active_ws_symbols:
+                msg = {"action": "subscribe", "params": f"T.{sym}"}
+                try:
+                    ws.send(json.dumps(msg))
+                    logging.info(f"[Polygon] Re-subscribed to T.{sym}")
+                except Exception as e:
+                    logging.error(f"[Polygon] WS re-subscribe error for {sym}: {e}")
+
     def _on_message(self, ws, message):
+        """
+        Receives message and triggers ALL registered callbacks via the manager.
+        """
         try:
             data = json.loads(message)
             for event in data:
                 if event.get("ev") == "T":
                     sym = event.get("sym")
                     price = event.get("p")
-                    cb = self.subscriptions.get(sym)
-                    if cb:
-                        cb(price)
+                    if sym and price is not None:
+                        # 🎯 The FIX: Trigger all callbacks for this symbol via the manager
+                        callback_manager.trigger(sym, price)
         except Exception as e:
             logging.error(f"[Polygon] WS message error: {e} | {message}")
 
@@ -278,4 +326,5 @@ if __name__ == "__main__":
     print(snapshot)
     time.sleep(3)
 
+# Note: assuming polygon_service is initialized after callback_manager is available
 polygon_service = PolygonService()
