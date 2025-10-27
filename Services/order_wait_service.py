@@ -28,6 +28,49 @@ class OrderWaitService:
         # Polling interval for alternate mode (seconds), e.g. 0.1s = 100ms
         self.poll_interval = poll_interval
 
+    def _poll_snapshot_thread(self, order_id: str, order: Order, tinfo: ThreadInfo):
+        """
+        Inner polling thread logic for trigger watcher (formerly _poll_snapshot).
+        Monitors a stock snapshot until the trigger condition is met or the order is cancelled.
+        """
+        delay = 2
+        last = 0
+        try:
+            while runtime_man.is_run() and order.state == OrderState.PENDING:
+                with self.lock:
+                    if order_id not in self.pending_orders or order_id in self.cancelled_orders:
+                        watcher_info.remove(order_id)
+                        return
+                
+                snap = self.polygon.get_snapshot(order.symbol)
+                if not snap:
+                    time.sleep(self.poll_interval)
+                    continue
+
+                last_price = snap.get("last")
+                msg = f"[WaitService] Poll {order.symbol} → {last_price}"
+                now = time.time()
+                
+                if now - last > delay:
+                    logging.info(msg)
+                    print(msg)
+                    last = now
+
+                if last_price:
+                    tinfo.update_status(STATUS_RUNNING, last_price=last_price)
+
+                if last_price and order.is_triggered(last_price):
+                    self._finalize_order(order_id, order, tinfo, last_price)
+                    # tinfo.update_status(STATUS_FINALIZED, last_price=last_price) # Updated inside _finalize_order
+                    with self.lock:
+                        if order_id in self.pending_orders:
+                            del self.pending_orders[order_id]
+                    return
+
+                time.sleep(self.poll_interval)
+        except Exception as e:
+            tinfo.update_status(STATUS_FAILED, info={"error": str(e)})
+
     def start_trigger_watcher(self, order: Order, mode: str = "poll") -> threading.Thread:
         """
         Start a dedicated thread (or ws subscription) to watch trigger price for an order.
@@ -51,45 +94,8 @@ class OrderWaitService:
 
         elif mode == "poll":
             # Old-school polling thread path
-            def _poll_snapshot(order_id: str, order: Order, tinfo: ThreadInfo):
-                delay = 2
-                last = 0
-                try:
-                    while runtime_man.is_run() and order.state == OrderState.PENDING:
-                        with self.lock:
-                            if order_id not in self.pending_orders or order_id in self.cancelled_orders:
-                                watcher_info.remove(order_id)
-                                return
-                        snap = self.polygon.get_snapshot(order.symbol)
-                        if not snap:
-                            time.sleep(self.poll_interval)
-                            continue
-
-                        last_price = snap.get("last")
-                        msg = f"[WaitService] Poll {order.symbol} → {last_price}"
-                        now = time.time()
-                        if now - last > delay:
-                            logging.info(msg)
-                            print(msg)
-                            last = now
-
-                        if last_price:
-                            tinfo.update_status(STATUS_RUNNING, last_price=last_price)
-
-                        if last_price and order.is_triggered(last_price):
-                            self._finalize_order(order_id, order,tinfo, last_price)
-                            #tinfo.update_status(STATUS_FINALIZED, last_price=last_price)
-                            with self.lock:
-                                if order_id in self.pending_orders:
-                                    del self.pending_orders[order_id]
-                            return
-
-                        time.sleep(self.poll_interval)
-                except Exception as e:
-                    tinfo.update_status(STATUS_FAILED, info={"error": str(e)})
-
             t = threading.Thread(
-                target=_poll_snapshot,
+                target=self._poll_snapshot_thread, # Calling the new private method
                 args=(order_id, order, tinfo),
                 daemon=True
             )
@@ -265,7 +271,7 @@ class OrderWaitService:
                 f"[WaitService] 🚨 TRIGGER ALREADY MET! Executing immediately. "
                 f"Current: {current_price}, Trigger: {order.trigger}"
             )
-            self._finalize_order(order_id, order)
+            self._finalize_order(order_id, order, tinfo=None, last_price=current_price) # Pass price for logging
             return order_id
 
         # Subscribe / start poller only if trigger not already met
@@ -316,7 +322,12 @@ class OrderWaitService:
         logging.info(msg)
 
         if order.is_triggered(price):
-            self._finalize_order(order_id, order)
+            # NOTE: We can't get tinfo here, as the WS path doesn't return a thread
+            # or Tinfo object. We'll update Tinfo manually if one exists,
+            # but for simplicity, we pass None for tinfo and the price for last_price
+            # to _finalize_order.
+            self._finalize_order(order_id, order, tinfo=None, last_price=price) 
+            
             try:
                 self.polygon.unsubscribe(order.symbol)
             except Exception as e:
@@ -327,9 +338,17 @@ class OrderWaitService:
                     del self.pending_orders[order_id]
 
   
-    def _finalize_order(self, order_id: str, order: Order,tinfo: ThreadInfo,last_price):
+    def _finalize_order(self, order_id: str, order: Order, tinfo: ThreadInfo, last_price):
         """Sends the order to TWS using the new TWSService."""
         
+        # Helper to update tinfo if it exists (for poll mode)
+        def _update_tinfo_status(status):
+            if tinfo:
+                tinfo.update_status(status, last_price=last_price)
+            # Special case for WS mode where tinfo might be None: try to find it
+            elif tinfo_ws := watcher_info.get_watcher(order_id):
+                 tinfo_ws.update_status(status, last_price=last_price)
+
 
         try:
             start_ts = time.time() * 1000
@@ -356,9 +375,12 @@ class OrderWaitService:
                         msg = f"[WaitService] Order finalized {order_id} → IB ID: {order._ib_order_id}"
                         logging.info(msg)
                         watcher_info.update_watcher(order_id, STATUS_FINALIZED)
-                        tinfo.update_status(STATUS_FINALIZED, last_price=last_price)
+                        _update_tinfo_status(STATUS_FINALIZED)
                     else:
                         logging.warning(f"[WaitService] Order {order_id} not filled within timeout window.")
+                        # Even if not filled, we mark the *watcher* as finalized if the order was sent
+                        # to prevent the polling thread from retrying (if applicable).
+                        _update_tinfo_status(STATUS_FINALIZED) 
 
                 # ✅ if stop-loss configured, launch stop-loss watcher
                     if order.trigger and order.sl_price and order.state == OrderState.FINALIZED:
@@ -391,12 +413,14 @@ class OrderWaitService:
                 msg = f"[WaitService] Order placement failed {order_id}"
                 logging.error(msg)
                 watcher_info.update_watcher(order_id, STATUS_FAILED)
+                _update_tinfo_status(STATUS_FAILED)
 
         except Exception as e:
             order.mark_failed(str(e))
             msg = f"[WaitService] Finalize failed {order_id}: {e}"
             logging.error(msg)
             watcher_info.update_watcher(order_id, STATUS_FAILED, info={"error": str(e)})
+            _update_tinfo_status(STATUS_FAILED)
 
     def get_order_status(self, order_id: str):
         return self.tws.get_order_status(order_id)
