@@ -877,17 +877,23 @@ class TWSService(EWrapper, EClient):
         Live premium for a *single* option contract.
         Prioritizes Polygon data if the market is closed/pre-market.
         """
-        # --- PATCH: Prioritize Polygon if TWS likely won't have the data (Outside RTH) ---
-        if is_market_closed_or_pre_market(): # <-- NEW CHECK
+        # --- 💡 MODIFIED PRE-MARKET BLOCK 💡 ---
+        # If market is closed/pre-market, ONLY use Polygon.
+        # Do not fall through to TWS logic if Polygon fails.
+        if is_market_closed_or_pre_market(): #
             logging.warning("[TWSService] Market closed/pre-market; prioritizing Polygon for premium.")
             try:
-                snap = polygon_service.get_option_snapshot(symbol, expiry, strike, right)
+                snap = polygon_service.get_option_snapshot(symbol, expiry, strike, right) #
                 if snap and snap.get("mid"):
                     logging.info(f"[TWSService] Polygon premium (Outside RTH) {snap['mid']}")
-                    return snap["mid"]
-                # If Polygon fails, let the rest of the function run (might get stale data from TWS)
+                    return snap["mid"] # <-- Return on success
+                else:
+                    logging.error(f"[TWSService] Polygon (Outside RTH) failed to find premium for {symbol}.")
+                    return None # <-- 💡 MUST return None on failure
             except Exception as e:
-                logging.error(f"[TWSService] Polygon primary failed: {e}")
+                logging.error(f"[TWSService] Polygon primary lookup failed: {e}")
+                return None # <-- 💡 MUST return None on exception
+        # --- END MODIFIED BLOCK ---
 
         # --- Regular Trading Hours or Polygon Failed: Try IBKR First ---
         if not self.is_connected():
