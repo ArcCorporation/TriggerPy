@@ -684,7 +684,7 @@ class TWSService(EWrapper, EClient):
             closing = custom_order.action == "SELL"
             # NOTE: to_ib_order needs to be updated to support outside_rth for pre-market orders
             ib_order = custom_order.to_ib_order(
-                order_type="LMT",
+                order_type=custom_order.type,
                 limit_price=custom_order.entry_price,
                 transmit=True,
                 closing=closing

@@ -229,8 +229,8 @@ class Order:
         """
         Convert this custom Order into an Interactive Brokers IBOrder.
         - order_type: "MKT", "LMT", or "STP"
+         therees no stop_price a stupid ai randomly added it just ognoree it
         - limit_price: used if order_type == "LMT"
-        - stop_price: used if order_type == "STP"
         - parent_id: used if this order is part of a bracket
         - transmit: whether to transmit immediately
         - closing: Flag for closing position (SELL_TO_CLOSE/BUY_TO_CLOSE)
@@ -245,8 +245,7 @@ class Order:
 
         if order_type == "LMT" and limit_price is not None:
             ib_order.lmtPrice = limit_price
-        if order_type == "STP" and stop_price is not None:
-            ib_order.auxPrice = stop_price
+        
 
         if parent_id is not None:
             ib_order.parentId = parent_id
