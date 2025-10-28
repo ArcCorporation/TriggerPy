@@ -451,7 +451,7 @@ class AppModel:
         quantity: int = 1,
         trigger_price: Optional[float] = None,
         status_callback=None,
-        arcTick=0.01
+        arcTick=0.01, type = "LMT"
     ) -> Dict:
         """
         Create & transmit an option order.  
@@ -507,6 +507,7 @@ class AppModel:
             expiry=self._expiry,
             strike=self._strike,
             right=self._right,
+            type=type,
             qty=quantity,
             entry_price=mid_premium,
             tp_price=self._take_profit,
