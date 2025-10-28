@@ -759,3 +759,48 @@ class OrderFrame(tk.Frame):
                 logging.error(f"[OrderFrame.deserialize] Model restore failed: {e}")
 
         return frame, consumed
+    
+
+class ScrollableFrame(ttk.Frame):
+    """
+    A scrollable Frame widget that uses a Canvas and Scrollbar.
+    Mouse wheel scrolling is bound to the canvas.
+    """
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
+
+        # 1. Create the Canvas
+        self.canvas = tk.Canvas(self, borderwidth=0, background="#ffffff")
+        
+        # 2. Create the Scrollbar
+        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        
+        # 3. Create the interior frame to hold content
+        self.scrollable_frame = ttk.Frame(self.canvas)
+
+        # 4. Bind the interior frame's size to the canvas
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")
+            )
+        )
+
+        # 5. Create the canvas window
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        
+        # 6. Configure the canvas to use the scrollbar
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        # 7. Grid layout
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+
+        # 8. Bind mouse wheel scrolling
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+
+    def _on_mousewheel(self, event):
+        """Handle mouse wheel scrolling."""
+        # Check if the mouse is over this canvas
+        if self.canvas.winfo_containing(event.x_root, event.y_root) == self.canvas:
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")

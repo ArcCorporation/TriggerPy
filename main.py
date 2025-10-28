@@ -7,7 +7,8 @@ from pathlib import Path
 from Helpers.debugger import DebugFrame, TkinterHandler
 from Services.order_manager import order_manager
 from model import general_app
-from view import Banner, OrderFrame
+# --- MODIFIED IMPORT ---
+from view import Banner, OrderFrame, ScrollableFrame
 from Services.watcher_info import watcher_info
 import os, sys
 import threading
@@ -72,8 +73,9 @@ class ArcTriggerApp(tk.Tk):
         ttk.Button(top_frame, text="Watchers", command=self.show_watchers).pack(side="left", padx=5)
         # Removed: ttk.Button(top_frame, text="Finalized Orders", ...)
 
-        # ---------- Order container ----------
-        self.order_container = ttk.Frame(self)
+        # --- MODIFIED: Order container ---
+        # Replaced ttk.Frame with the new ScrollableFrame
+        self.order_container = ScrollableFrame(self)
         self.order_container.pack(fill="both", expand=True)
 
         self.order_frames = []
@@ -168,7 +170,8 @@ class ArcTriggerApp(tk.Tk):
             if not block.startswith("<Frame>|"):
                 continue
             try:
-                frame, _ = OrderFrame.deserialize([block], parent=self.order_container)
+                # --- MODIFIED: Parent is now the inner frame of the scrollable container ---
+                frame, _ = OrderFrame.deserialize([block], parent=self.order_container.scrollable_frame)
                 frame.pack(fill="x", pady=10, padx=10)
                 self.order_frames.append(frame)
                 restored += 1
@@ -329,7 +332,8 @@ class ArcTriggerApp(tk.Tk):
         except ValueError:
             count = 1
         for i in range(count):
-            frame = OrderFrame(self.order_container, order_id=i + 1)
+            # --- MODIFIED: Parent is now the inner frame of the scrollable container ---
+            frame = OrderFrame(self.order_container.scrollable_frame, order_id=i + 1)
             frame.pack(fill="x", pady=10, padx=10)
             self.order_frames.append(frame)
 
@@ -360,4 +364,3 @@ if __name__ == "__main__":
     setup_logging()
     app = ArcTriggerApp()
     app.mainloop()
-
