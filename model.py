@@ -113,28 +113,27 @@ class GeneralApp:
 
     def get_market_data_for_trigger(self, symbol: str, day: str) -> Optional[Dict]:
         """
-        Wrapper around polygon.get_snapshot to retrieve high/low data.
-        Day can be 'intraday' (today) or 'premarket' (using prevDay as proxy).
+        Wrapper around polygon service to retrieve high/low data.
+        Day can be 'intraday' (today) or 'premarket'.
         Returns {'high', 'low'} or None.
         """
         if not self._polygon:
             raise RuntimeError("GeneralApp: Polygon not connected")
         
-        snapshot = self._polygon.get_snapshot(symbol)
-        if not snapshot:
-            return None
+        # --- THIS IS THE FIX ---
+        # Stop calling get_snapshot() and use the new, correct methods.
         
         if day == 'intraday':
             # Use today's HOD/LOD
             return {
-                'high': snapshot.get('today_high'),
-                'low': snapshot.get('today_low')
+                'high': self._polygon.get_intraday_high(symbol),
+                'low': self._polygon.get_intraday_low(symbol)
             }
         elif day == 'premarket':
-            # Use prevDay high/low as a simple proxy for premarket range
+            # Use the new service to get the true premarket H/L
             return {
-                'high': snapshot.get('prev_high'),
-                'low': snapshot.get('prev_low')
+                'high': self._polygon.get_premarket_high(symbol),
+                'low': self._polygon.get_premarket_low(symbol)
             }
         return None
 
