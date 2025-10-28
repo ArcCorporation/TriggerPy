@@ -4,10 +4,16 @@ import json
 import threading
 import time
 import websocket
+import datetime
+from datetime import time as datetime_time  # Import 'time' with an alias
+from typing import Optional, Dict
 from Services.enigma3 import Enigma3Service
 from Services.randomness import KEY
 # Import the new callback manager
 from Services.callback_manager import callback_manager, ThreadedCallbackService 
+# --- CORRECTED IMPORT ---
+# Use the constants from your provided library
+from Services.nasdaq_info import EASTERN, MARKET_OPEN
 
 
 class PolygonService:
@@ -27,6 +33,8 @@ class PolygonService:
         # Track active WS subscriptions to avoid sending 'subscribe' message multiple times
         self._active_ws_symbols = set() 
         self._ws_lock = threading.Lock()
+        
+        self._premarket_cache = {}
 
 
         # Background websocket start
@@ -209,6 +217,87 @@ class PolygonService:
             logging.error("[Polygon] get_snapshot failed: %s", e)
             return None
 
+    def _get_premarket_aggregates(self, symbol: str) -> Optional[Dict]:
+        """
+        Private helper to get the true premarket H/L.
+        Uses EASTERN and MARKET_OPEN from nasdaq_info.py.
+        """
+        # --- LOGIC CORRECTED ---
+        # 1. Use the imported timezone
+        now_et = datetime.datetime.now(EASTERN)
+        today_str = now_et.strftime('%Y-%m-%d')
+        cache_key = f"{symbol}_{today_str}"
+
+        # 2. Check cache first
+        if cache_key in self._premarket_cache:
+            return self._premarket_cache[cache_key]
+
+        # 3. Define premarket window using imported constants
+        PREMARKET_START_TIME = datetime_time(4, 0) # 4:00 AM
+        
+        premarket_start = datetime.datetime.combine(now_et.date(), PREMARKET_START_TIME, tzinfo=EASTERN)
+        market_open = datetime.datetime.combine(now_et.date(), MARKET_OPEN, tzinfo=EASTERN)
+
+        if now_et < premarket_start:
+            logging.warning(f"[Polygon] Premarket query for {symbol} run before 4 AM ET.")
+            return None # Premarket hasn't started
+
+        # 4. Determine query range (from 4AM until now, or 9:30)
+        query_end = min(now_et, market_open)
+        start_ms = int(premarket_start.timestamp() * 1000)
+        end_ms = int(query_end.timestamp() * 1000)
+
+        # 5. Build and execute API call
+        url = f"{self.base_url}/v2/aggs/ticker/{symbol.upper()}/range/1/minute/{start_ms}/{end_ms}"
+        params = {"apiKey": self.api_key, "sort": "asc", "adjusted": "true"}
+
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if data.get("resultsCount", 0) == 0 or not data.get("results"):
+                logging.warning(f"[Polygon] No premarket bars found for {symbol}.")
+                return None
+
+            # 6. Find the highest high and lowest low
+            bars = data.get("results")
+            result = {
+                "high": max(bar['h'] for bar in bars),
+                "low": min(bar['l'] for bar in bars)
+            }
+
+            # 7. Only cache if the premarket session is over
+            if now_et >= market_open:
+                self._premarket_cache[cache_key] = result
+            
+            return result
+
+        except Exception as e:
+            logging.error(f"[Polygon] _get_premarket_aggregates failed for {symbol}: {e}")
+            return None
+
+    # --- Public-Facing Data Methods ---
+
+    def get_premarket_high(self, symbol: str) -> Optional[float]:
+        """Gets the true premarket high (4:00 - 9:30 AM ET)."""
+        data = self._get_premarket_aggregates(symbol)
+        return data.get('high') if data else None
+
+    def get_premarket_low(self, symbol: str) -> Optional[float]:
+        """Gets the true premarket low (4:00 - 9:30 AM ET)."""
+        data = self._get_premarket_aggregates(symbol)
+        return data.get('low') if data else None
+
+    def get_intraday_high(self, symbol: str) -> Optional[float]:
+        """Gets the current day's high from the snapshot."""
+        data = self.get_snapshot(symbol)
+        return data.get('today_high') if data else None
+
+    def get_intraday_low(self, symbol: str) -> Optional[float]:
+        """Gets the current day's low from the snapshot."""
+        data = self.get_snapshot(symbol)
+        return data.get('today_low') if data else None
 
     # ---------------- WS METHODS ----------------
     def subscribe(self, symbol: str, callback):
@@ -298,6 +387,8 @@ class PolygonService:
 
     def _on_message(self, ws, message):
         """
+File `nasdaq_info.py` provided by the user.
+
         Receives message and triggers ALL registered callbacks via the manager.
         """
         try:
