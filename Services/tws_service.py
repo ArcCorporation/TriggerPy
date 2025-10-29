@@ -493,6 +493,12 @@ class TWSService(EWrapper, EClient):
         event = threading.Event()
         self._contract_details[req_id] = {"event": event, "details": None}
 
+        logging.info(f"[ResolveConId] Starting for {contract.symbol} "
+                 f"{getattr(contract, 'lastTradeDateOrContractMonth', '?')} "
+                 f"{getattr(contract, 'strike', '?')}{getattr(contract, 'right', '?')} "
+                 f"(req_id={req_id}, timeout={timeout}s)")
+
+
         def on_contract_details(reqId, contractDetails):
             if reqId == req_id:
                 self._contract_details[req_id]["details"] = contractDetails
@@ -509,21 +515,30 @@ class TWSService(EWrapper, EClient):
         self.contractDetailsEnd = on_contract_details_end
 
         try:
+            logging.info(f"[ResolveConId] Requesting contract details from IBKR for {contract.symbol}") 
+            start_time = time.time()
+
             self.reqContractDetails(req_id, contract)
             if event.wait(timeout):
+                elapsed = time.time() - start_time
+                logging.info(f"[ResolveConId] Callback received for {contract.symbol} after {elapsed:.2f}s")
                 data = self._contract_details[req_id]["details"]
                 if data:
                     conid = data.contract.conId
-                    logging.info(f"Resolved conId {conid} for {contract.symbol}")
+                    logging.info(f"[ResolveConId] ✅ Resolved conId={conid} "
+                                 f"for {contract.symbol} in {elapsed:.2f}s")
                     return conid
                 else:
-                    logging.warning(f"No contract details returned for {contract.symbol}")
+                    logging.info(f"[ResolveConId] ⚠️ Empty data for {contract.symbol}, "
+                                 f"IBKR returned no contract details (elapsed={elapsed:.2f}s)")
                     return None
             else:
-                logging.warning(f"Timeout resolving contract for {contract.symbol}")
+                logging.info(f"[ResolveConId] ⏱ Timeout waiting {timeout}s for {contract.symbol} "
+                             f"(req_id={req_id})")
                 return None
+
         except Exception as e:
-            logging.error(f"Error resolving conId: {str(e)}")
+            logging.info(f"[ResolveConId] ❌ Exception resolving {contract.symbol}: {str(e)}")
             return None
         finally:
             self.contractDetails = orig_cd
