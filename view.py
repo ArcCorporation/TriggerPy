@@ -548,6 +548,7 @@ class OrderFrame(tk.Frame):
         pass
 
     # ---------- actions ----------
+    
     def place_order(self):
         if not self.model or not self.current_symbol:
             self._set_status("Error: No symbol selected", "red")
@@ -573,40 +574,94 @@ class OrderFrame(tk.Frame):
         def worker():
             try:
                 strike = float(self.combo_strike.get())
-                
-                
+
+                # ⚠️ STOP LOSS WARNING POPUP (blocking)
+                if sl is None:
+                    proceed_flag = tk.BooleanVar(value=False)
+
+                    def show_popup():
+                        popup = tk.Toplevel(self)
+                        popup.title("⚠️ Warning")
+                        popup.geometry("340x140")
+                        popup.configure(bg="#222")
+                        popup.grab_set()
+
+                        ttk.Label(
+                            popup,
+                            text="Stop Loss not set!",
+                            font=("Arial", 11, "bold")
+                        ).pack(pady=(15, 5))
+
+                        ttk.Label(
+                            popup,
+                            text="Proceeding without Stop Loss may be risky.",
+                            font=("Arial", 9)
+                        ).pack(pady=(0, 10))
+
+                        frame_btn = ttk.Frame(popup)
+                        frame_btn.pack(pady=5)
+
+                        def proceed():
+                            proceed_flag.set(True)
+                            popup.destroy()
+
+                        def cancel():
+                            proceed_flag.set(False)
+                            popup.destroy()
+
+                        ttk.Button(frame_btn, text="Proceed Anyway", command=proceed).pack(side="left", padx=10)
+                        ttk.Button(frame_btn, text="Cancel", command=cancel).pack(side="left", padx=10)
+
+                    # Show popup synchronously in UI thread
+                    self._ui(show_popup)
+                    self.wait_variable(proceed_flag)
+                    if not proceed_flag.get():
+                        self._ui(lambda: self._set_status("Order cancelled (no SL).", "red"))
+                        self.btn_save.config(state="normal")
+                        return
+
+                # Continue normally if OK
                 self.model.set_option_contract(maturity, strike, right)
                 if sl is not None:
                     self.model._stop_loss = sl
                 if tp is not None:
                     self.model._take_profit = tp
-                # new
+
                 try:
                     arcTick = float(self.entry_offset.get() or 1.06)
                 except ValueError:
                     arcTick = 1.06
+
                 order_data = self.model.place_option_order(
-                    action="BUY", quantity=quantity, trigger_price=trigger,
+                    action="BUY",
+                    quantity=quantity,
+                    trigger_price=trigger,
                     position=position_size,
-                    arcTick=arcTick, type=self.type
+                    arcTick=arcTick,
+                    type=self.type
                 )
                 state = order_data.get("state", "UNKNOWN")
                 msg = f"Order {state}: {order_data.get('order_id')}"
                 color = "green" if state == "ACTIVE" else "orange"
+
                 def ok():
                     self._set_status(msg, color)
                     self.btn_save.config(state="normal")
+
                 self._ui(ok)
                 logging.info(f"Order placed: {order_data}")
+
             except Exception as e:
                 self._e = e
                 def err():
-                    
                     self._set_status(f"Order failed: {self._e}", "red")
                     self.btn_save.config(state="normal")
                 self._ui(err)
                 logging.error(f"Order failed: {e}")
+
         threading.Thread(target=worker, daemon=True).start()
+
+
 
     def cancel_order(self):
         if not self.model:
