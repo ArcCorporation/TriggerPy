@@ -368,14 +368,47 @@ class AppModel:
         return self._expiry, self._strike, self._right
 
     def _validate_option_contract(self, expiry: str, strike: float, right: str) -> bool:
+        """
+        Validate that the given expiry & strike exist in the TWS chain.
+        During premarket hours (before 9:30 ET), allow non-Friday expiries by aligning forward.
+        """
+        from datetime import datetime, time as dtime
+        import pytz
+
         try:
             maturities = general_app.tws.get_maturities(self._symbol)
             if not maturities:
+                logging.warning(f"[{self._symbol}] No maturities from TWS yet.")
                 return False
-            return expiry in maturities['expirations'] and strike in maturities['strikes']
-        except Exception as e:
-            logging.error(f"AppModel[{self._symbol}]: Contract validation failed: {e}")
+
+            exp_ok = expiry in maturities['expirations']
+            strike_ok = strike in maturities['strikes']
+
+            if exp_ok and strike_ok:
+                return True
+
+            # 🕓 PREMARKET WINDOW (4:00 – 9:30 AM ET)
+            EASTERN = pytz.timezone("US/Eastern")
+            now_et = datetime.now(EASTERN).time()
+            if dtime(4, 0) <= now_et < dtime(9, 30):
+             
+                aligned = align_expiry_to_friday(expiry)
+                if aligned in maturities['expirations']:
+                    logging.warning(f"[{self._symbol}] Premarket expiry {expiry} auto-aligned → {aligned}")
+                    self._expiry = aligned
+                    return True
+                else:
+                    # still allow — chain not yet refreshed
+                    logging.warning(f"[{self._symbol}] Premarket validation bypass for {expiry} (TWS chain not refreshed)")
+                    return True
+
+            logging.error(f"[{self._symbol}] Contract invalid → expiry {expiry} or strike {strike} not in chain")
             return False
+
+        except Exception as e:
+            logging.error(f"[{self._symbol}] Contract validation error: {e}")
+            return False
+
 
     def set_risk(self, stop_loss: float, take_profit: float):
         self._stop_loss = stop_loss

@@ -47,39 +47,60 @@ class OrderManager:
     # ------------------------------------------------------------------------
 
     def issue_sell_order(self,
-                     base_order_id: str,
-                     sell_qty: int,
-                     exit_order: Order) -> Optional[str]: 
+                 base_order_id: str,
+                 sell_qty: int,
+                 exit_order: Order) -> Optional[str]:
         """
-        Sell an existing TWS-tracked position by its order_id.
-        Requires a pre-populated exit_order (with qty and previous_id) for execution.
+        Mirror of WaitService stop-loss sell flow:
+        Executes a guaranteed MKT SELL via tws.sell_position_by_order_id(),
+        identical logic path to _finalize_exit_order().
         """
-        logging.info(f"[OrderManager] is attempting MKT sale of options {base_order_id} x{sell_qty}")
-        pos = self.tws_service.get_position_by_order_id(base_order_id)
-        if not pos or pos.get("qty", 0) <= 0:
-            logging.info(f"[OrderManager] issue_sell_order: no live position for {base_order_id}")
+        logging.info(f"[OrderManager] attempting MKT sale of {base_order_id} x{sell_qty}")
+
+        try:
+            # 1️⃣ Lookup live position (must exist for sell_position_by_order_id)
+            pos = self.tws_service.get_position_by_order_id(base_order_id)
+            if not pos or pos.get("qty", 0) <= 0:
+                logging.error(f"[OrderManager] issue_sell_order: no live position for {base_order_id}")
+                return None
+
+            # 2️⃣ Resolve correct option contract (same as WaitService)
+            contract = self.tws_service.create_option_contract(
+                pos["symbol"], pos["expiry"], pos["strike"], pos["right"]
+            )
+
+            # 3️⃣ Log for clarity
+            logging.info(
+                f"[OrderManager] Submitting MKT exit order for {pos['symbol']} "
+                f"qty={sell_qty} ({pos['expiry']} {pos['strike']}{pos['right']})"
+            )
+
+            # 4️⃣ Execute via TWS service — exact same function as WaitService
+            success = self.tws_service.sell_position_by_order_id(
+                base_order_id,
+                contract=contract,
+                qty=sell_qty,
+                limit_price=None,      # Market order, same as _finalize_exit_order
+                ex_order=exit_order
+            )
+
+            # 5️⃣ Mirror the same handling logic
+            if success:
+                logging.info(
+                    f"[OrderManager] Sold {sell_qty} {pos['symbol']} via TWS position map – MKT Exit successful."
+                )
+                exit_order.mark_finalized(f"Manual sell triggered for {pos['symbol']}")
+                return base_order_id
+            else:
+                logging.error(f"[OrderManager] TWS refused sell for {base_order_id}")
+                exit_order.mark_failed("TWS refused sell order")
+                return None
+
+        except Exception as e:
+            logging.exception(f"[OrderManager] Exception in manual sell for {base_order_id}: {e}")
+            exit_order.mark_failed(str(e))
             return None
 
-        # Resolve the Contract object from the position details
-        contract = self.tws_service.create_option_contract(
-             pos["symbol"], pos["expiry"], pos["strike"], pos["right"]
-        )
-        
-        # Use TWSService’s built-in position selling, passing the custom exit Order
-        # Note: limit_price is set to None because the Order type is MKT
-        ok = self.tws_service.sell_position_by_order_id(
-            base_order_id, 
-            contract=contract, 
-            qty=sell_qty, 
-            limit_price=None, 
-            ex_order=exit_order # Pass the pre-created exit order
-        )
-        if ok:
-            logging.info(f"[OrderManager] MKT SELL order placed -> base={base_order_id}, qty={sell_qty}")
-            return base_order_id  # keep same id for tracking continuity
-
-        logging.error(f"[OrderManager] MKT SELL order failed for {base_order_id}")
-        return None
 
 
     def remove_order(self, order_id):
