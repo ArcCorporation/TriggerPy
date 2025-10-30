@@ -47,35 +47,51 @@ class OrderManager:
     # ------------------------------------------------------------------------
 
     def issue_sell_order(self,
-                 base_order_id: str,
-                 sell_qty: int,
-                 exit_order: Order) -> Optional[str]:
+                base_order_id: str,
+                sell_qty: int,
+                exit_order: Order) -> Optional[str]:
         """
         Mirror of WaitService stop-loss sell flow:
         Executes a guaranteed MKT SELL via tws.sell_position_by_order_id(),
         identical logic path to _finalize_exit_order().
         """
-        logging.info(f"[OrderManager] attempting MKT sale of {base_order_id} x{sell_qty}")
+        logging.info("="*80)
+        logging.info(f"[OrderManager] >>> BEGIN issue_sell_order(base_order_id={base_order_id}, sell_qty={sell_qty})")
+        logging.info(f"[OrderManager] ExitOrder ref={getattr(exit_order, 'previous_id', 'N/A')} symbol={exit_order.symbol}")
 
         try:
             # 1️⃣ Lookup live position (must exist for sell_position_by_order_id)
             pos = self.tws_service.get_position_by_order_id(base_order_id)
+            logging.info(f"[OrderManager] Position lookup result: {pos}")
             if not pos or pos.get("qty", 0) <= 0:
                 logging.error(f"[OrderManager] issue_sell_order: no live position for {base_order_id}")
+                logging.info("="*80)
                 return None
 
-            # 2️⃣ Resolve correct option contract (same as WaitService)
-            contract = self.tws_service.create_option_contract(
-                pos["symbol"], pos["expiry"], pos["strike"], pos["right"]
-            )
+            live_qty = pos.get("qty")
+            logging.info(f"[OrderManager] Live qty={live_qty}, requested sell_qty={sell_qty}")
 
-            # 3️⃣ Log for clarity
+            # 2️⃣ Resolve correct option contract (same as WaitService)
+            try:
+                contract = self.tws_service.create_option_contract(
+                    pos["symbol"], pos["expiry"], pos["strike"], pos["right"]
+                )
+                logging.info(f"[OrderManager] Contract resolved: {contract}")
+            except Exception as e:
+                logging.exception(f"[OrderManager] Failed to create option contract for {pos}: {e}")
+                logging.info("="*80)
+                exit_order.mark_failed(f"Contract creation failed: {e}")
+                return None
+
+            # 3️⃣ Log for clarity before sending
             logging.info(
-                f"[OrderManager] Submitting MKT exit order for {pos['symbol']} "
-                f"qty={sell_qty} ({pos['expiry']} {pos['strike']}{pos['right']})"
+                f"[OrderManager] Submitting MKT exit order → "
+                f"Symbol={pos['symbol']} Qty={sell_qty} "
+                f"({pos['expiry']} {pos['strike']}{pos['right']})"
             )
 
             # 4️⃣ Execute via TWS service — exact same function as WaitService
+            logging.info("[OrderManager] Calling TWSService.sell_position_by_order_id() ...")
             success = self.tws_service.sell_position_by_order_id(
                 base_order_id,
                 contract=contract,
@@ -83,24 +99,28 @@ class OrderManager:
                 limit_price=None,      # Market order, same as _finalize_exit_order
                 ex_order=exit_order
             )
+            logging.info(f"[OrderManager] TWSService.sell_position_by_order_id() returned: {success}")
 
             # 5️⃣ Mirror the same handling logic
             if success:
                 logging.info(
-                    f"[OrderManager] Sold {sell_qty} {pos['symbol']} via TWS position map – MKT Exit successful."
+                    f"[OrderManager] ✅ Sold {sell_qty} {pos['symbol']} via TWS position map – MKT Exit successful."
                 )
                 exit_order.mark_finalized(f"Manual sell triggered for {pos['symbol']}")
+                logging.info(f"[OrderManager] Exit order {exit_order.previous_id} marked finalized.")
+                logging.info("="*80)
                 return base_order_id
             else:
-                logging.error(f"[OrderManager] TWS refused sell for {base_order_id}")
+                logging.error(f"[OrderManager] ❌ TWS refused sell for {base_order_id}")
                 exit_order.mark_failed("TWS refused sell order")
+                logging.info("="*80)
                 return None
 
         except Exception as e:
             logging.exception(f"[OrderManager] Exception in manual sell for {base_order_id}: {e}")
             exit_order.mark_failed(str(e))
+            logging.info("="*80)
             return None
-
 
 
     def remove_order(self, order_id):
