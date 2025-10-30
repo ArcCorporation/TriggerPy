@@ -152,26 +152,58 @@ class OrderManager:
         Sell 100% of the remaining contracts using a Market Order.
         (Original Breakeven logic of selling at entry price is replaced by MKT for guaranteed exit.)
         """
+        logging.info("="*80)
+        logging.info(f"[BREAKEVEN] BEGIN for order_id={order_id}")
+        logging.info(f"[BREAKEVEN] Finalized orders tracked: {len(self.finalized_orders)}")
+
         base = self.finalized_orders.get(order_id)
-        if not base or base.action != "BUY":
-            logging.info("[OrderManager] breakeven: no buy-order %s", order_id)
+        if not base:
+            logging.error(f"[BREAKEVEN] No finalized order found for {order_id}")
+            logging.info("="*80)
             return None
+        if base.action != "BUY":
+            logging.warning(f"[BREAKEVEN] Order {order_id} not a BUY (action={base.action})")
+            logging.info("="*80)
+            return None
+
+        logging.info(f"[BREAKEVEN] Base order located: {base.symbol} {base.expiry} {base.strike}{base.right}")
+        logging.info(f"[BREAKEVEN] Entry price: {base.entry_price}, SL: {base.sl_price}, TP: {base.tp_price}")
 
         pos = self.tws_service.get_position_by_order_id(order_id)
-        if not pos or pos.get("qty", 0) <= 0:
-            logging.warning(f"[OrderManager] breakeven: position already closed for {order_id}")
+        if not pos:
+            logging.error(f"[BREAKEVEN] No position found for {order_id}")
+            logging.info("="*80)
             return None
-            
-        sell_qty = pos["qty"] # Sell 100% of remaining
 
-        logging.info(f"[OrderManager] BREAKEVEN triggered for {order_id}: "
-             f"Selling {sell_qty} contracts (MKT Exit).")
+        qty = pos.get("qty", 0)
+        logging.info(f"[BREAKEVEN] Live position: {pos}")
+        if qty <= 0:
+            logging.warning(f"[BREAKEVEN] Position already closed or qty=0 for {order_id}")
+            logging.info("="*80)
+            return None
 
-        # Create a MKT exit order
+        sell_qty = qty
+        logging.info(f"[BREAKEVEN] Triggering MKT exit for full qty={sell_qty}")
+
+        # Create and log exit order details
         exit_order = self._create_exit_order(base, sell_qty)
+        logging.info(f"[BREAKEVEN] Exit order created with previous_id={exit_order.previous_id}")
 
-        # Execute sale
-        return self.issue_sell_order(order_id, sell_qty, exit_order=exit_order)
+        try:
+            # Execute
+            logging.info(f"[BREAKEVEN] Calling issue_sell_order() → base_id={order_id}")
+            result = self.issue_sell_order(order_id, sell_qty, exit_order=exit_order)
+            logging.info(f"[BREAKEVEN] issue_sell_order() returned: {result}")
+            if not result:
+                logging.error(f"[BREAKEVEN] issue_sell_order() returned None — possible TWS rejection or missing position map.")
+            else:
+                logging.info(f"[BREAKEVEN] SUCCESSFUL exit for {order_id}")
+        except Exception as e:
+            logging.exception(f"[BREAKEVEN] Exception during breakeven execution: {e}")
+
+        logging.info("="*80)
+        return result
+
 
     def get_order_status(self, order_id):
         """

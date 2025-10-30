@@ -143,15 +143,34 @@ class PolygonService:
                     continue
 
                 # 3-decimal strike tolerance
-                diff = abs(round(float(str_strike), 3) - round(float(strike), 3))
-                if diff < best_diff:
+                                # 🔧 PATCH: tolerate small rounding / feed mismatch
+                diff = abs(float(str_strike) - float(strike))
+                if diff < 0.25 and diff < best_diff:   # was strict 3-decimal
                     best_diff = diff
                     best_match = item
 
+            # 🔧 PATCH: soft-fail + fallback check
             if not best_match:
-                logging.error("[Polygon] No matching contract in chain for %s %s %s%s",
-                            underlying, expiry, strike, right)
+                logging.warning(
+                    "[Polygon] No *exact* match in chain for %s %s %s%s — retrying loose filter",
+                    underlying, expiry, strike, right,
+                )
+                # retry once more with ±1-point tolerance (TSLA 449–451 type cases)
+                for item in results:
+                    details = item.get("details", {}) or {}
+                    s = details.get("strike_price")
+                    if s and abs(float(s) - float(strike)) < 1.0 \
+                       and right[0] in details.get("contract_type", "").upper():
+                        best_match = item
+                        break
+
+            if not best_match:
+                logging.warning(
+                    "[Polygon] No matching contract after loose retry for %s %s %s%s",
+                    underlying, expiry, strike, right,
+                )
                 return None
+
 
             quote = best_match.get("last_quote", {})
             trade = best_match.get("last_trade", {})

@@ -51,6 +51,8 @@ class ArcTriggerApp(tk.Tk):
         self.title("ArcTriggerPy")
         self.configure(bg="black")
         self.iconbitmap(resource_path("icon.ico"))
+        self.geometry("1400x800")  # width x height
+
         # ---------- Banner ----------
         self.banner = Banner(self)
         self.banner.pack(fill="x")
