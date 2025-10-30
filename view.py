@@ -806,10 +806,20 @@ class ScrollableFrame(ttk.Frame):
         self.scrollbar.pack(side="right", fill="y")
 
         # 8. Bind mouse wheel scrolling
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        self._bind_global_scroll()
 
-    def _on_mousewheel(self, event):
-        """Handle mouse wheel scrolling."""
-        # Check if the mouse is over this canvas
-        if self.canvas.winfo_containing(event.x_root, event.y_root) == self.canvas:
-            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+    def _bind_global_scroll(self):
+        """Bind mousewheel to the root window so it scrolls everywhere."""
+        root = self.winfo_toplevel()  # main Tk instance
+        root.bind_all("<MouseWheel>", self._on_mousewheel_windows)
+        root.bind_all("<Button-4>", self._on_mousewheel_linux)
+        root.bind_all("<Button-5>", self._on_mousewheel_linux)
+
+    def _on_mousewheel_windows(self, event):
+        """Scroll handler for Windows / macOS."""
+        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _on_mousewheel_linux(self, event):
+        """Scroll handler for Linux (button 4/5)."""
+        direction = -1 if event.num == 4 else 1
+        self.canvas.yview_scroll(direction, "units")
