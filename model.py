@@ -507,7 +507,9 @@ class AppModel:
             raise ValueError(f"Trigger {trigger_price} invalid for current price {current_price}")
 
         if is_market_closed_or_pre_market():
-            logging.info(f"AppModel[{self._symbol}]: Premarket detected → queuing place_option_order() for RTH.")
+            status = f"AppModel[{self._symbol}]: Premarket detected → queuing place_option_order() for RTH."
+            logging.info(status)
+            status_callback(status, "orange")
             order_queue.queue_action(self, action, position, quantity, trigger_price, status_callback, arcTick, type)
             return {}
 

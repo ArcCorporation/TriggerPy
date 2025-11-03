@@ -636,7 +636,9 @@ class OrderFrame(tk.Frame):
                     action="BUY",
                     quantity=quantity,
                     trigger_price=trigger,
+                    status_callback=self._set_status,
                     position=position_size,
+                    
                     arcTick=arcTick,
                     type=self.type
                 )
