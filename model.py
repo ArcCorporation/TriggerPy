@@ -9,6 +9,9 @@ from Services.order_manager import order_manager
 from Helpers.Order import Order, OrderState
 import random
 
+from Services.nasdaq_info import is_market_closed_or_pre_market
+from Services.order_queue_service import order_queue
+
 def align_expiry_to_friday(expiry: str) -> str:
     import datetime
     y, m, d = int(expiry[:4]), int(expiry[4:6]), int(expiry[6:8])
@@ -502,6 +505,11 @@ class AppModel:
 
         if not self._validate_breakout_trigger(trigger_price, current_price):
             raise ValueError(f"Trigger {trigger_price} invalid for current price {current_price}")
+
+        if is_market_closed_or_pre_market():
+            logging.info(f"AppModel[{self._symbol}]: Premarket detected → queuing place_option_order() for RTH.")
+            order_queue.queue_action(self, action, position, quantity, trigger_price, status_callback, arcTick, type)
+            return {}
 
         # 2. live option premium (snapshot) – can time-out
         # ⚡ FIX: Call get_option_premium which has the Polygon fallback and returns the mid-price float ⚡
