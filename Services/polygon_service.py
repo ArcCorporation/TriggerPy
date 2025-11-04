@@ -206,10 +206,10 @@ class PolygonService:
 
     def get_snapshot(self, symbol: str):
         """
-        Retrieves real-time snapshot for a single stock ticker using Polygon.io Single-Ticker Stocks Snapshot API.
+        Retrieves real-time snapshot for a single stock ticker.
+        Corrected to use Polygon v2 single-ticker endpoint.
         """
-        symbol_upper = symbol.upper()
-        url = f"{self.base_url}/v2/snapshot/locale/us/markets/stocks/tickers/{symbol_upper}"
+        url = f"{self.base_url}/v2/snapshot/locale/us/markets/stocks/tickers/{symbol.upper()}"
         params = {"apiKey": self.api_key}
 
         try:
@@ -217,39 +217,38 @@ class PolygonService:
             resp.raise_for_status()
             payload = resp.json()
 
-            ticker_data = payload.get("ticker")
-            if not isinstance(ticker_data, dict):
-                logging.warning(f"[Polygon] Unexpected results format for {symbol_upper}: {type(ticker_data)}")
+            ticker_node = payload.get("ticker")
+            if not isinstance(ticker_node, dict):
+                logging.warning(f"[Polygon] Unexpected format for {symbol}: {type(ticker_node)}")
                 return None
 
-            # Extract relevant fields
-            last_trade = ticker_data.get("lastTrade", {})
-            last_quote = ticker_data.get("lastQuote", {})
-            day_bar    = ticker_data.get("day", {})
-            prev_day   = ticker_data.get("prevDay", {})
+            last_trade = ticker_node.get("lastTrade", {})
+            last_quote = ticker_node.get("lastQuote", {})
+            day_bar = ticker_node.get("day", {})
+            prev_day = ticker_node.get("prevDay", {})
 
-            bid  = last_quote.get("bid")
-            ask  = last_quote.get("ask")
+            bid = last_quote.get("bid")
+            ask = last_quote.get("ask")
             last = last_trade.get("price")
-
-            today_high = day_bar.get("high")
-            today_low  = day_bar.get("low")
-            prev_high  = prev_day.get("high")
-            prev_low   = prev_day.get("low")
+            high = day_bar.get("high")
+            low = day_bar.get("low")
+            prev_high = prev_day.get("high")
+            prev_low = prev_day.get("low")
 
             return {
                 "last": last,
                 "bid": bid,
                 "ask": ask,
-                "today_high": today_high,
-                "today_low": today_low,
+                "today_high": high,
+                "today_low": low,
                 "prev_high": prev_high,
                 "prev_low": prev_low,
             }
 
         except Exception as e:
-            logging.error(f"[Polygon] get_snapshot failed for {symbol_upper}: {e}")
+            logging.error(f"[Polygon] get_snapshot failed: {e}")
             return None
+
 
 
 
