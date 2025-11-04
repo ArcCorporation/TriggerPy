@@ -8,7 +8,7 @@ from model import general_app, get_model, AppModel
 from Services import nasdaq_info
 from Services.order_manager import order_manager
 from Helpers.Order import OrderState
-
+from Services.nasdaq_info import is_market_closed_or_pre_market
 
 # ---------------- Banner ----------------
 class Banner(tk.Canvas):
@@ -642,6 +642,8 @@ class OrderFrame(tk.Frame):
                     arcTick=arcTick,
                     type=self.type
                 )
+                if is_market_closed_or_pre_market():
+                    return
                 state = order_data.get("state", "UNKNOWN")
                 msg = f"Order {state}: {order_data.get('order_id')}"
                 color = "green" if state == "ACTIVE" else "orange"

@@ -43,50 +43,46 @@ class PolygonService:
     # ---------------- REST METHODS ----------------
     def get_option_snapshot(self, underlying: str, expiry: str, strike: float, right: str):
         """
-        Fetch current snapshot for a given option contract.
-        Falls back to full chain if single-contract call fails.
+        Fetch current snapshot for a given option contract (TWS-compatible format).
+        Uses the latest Polygon v3 API (no /{occ} path).
         Returns {'symbol', 'bid', 'ask', 'last', 'mid', 'updated'} or None.
         """
         try:
-            y, m, d = expiry[:4], expiry[4:6], expiry[6:8]
-            strike_str = f"{int(strike * 1000):08d}"
-            occ = f"O:{underlying.upper()}{y[2:]}{m}{d}{right.upper()}{strike_str}"
+            # Polygon now requires contract filters via query params
+            expiration_date = f"{expiry[:4]}-{expiry[4:6]}-{expiry[6:8]}"
+            contract_type = "call" if right.upper().startswith("C") else "put"
 
-            # --- 1) Try single-contract endpoint first ---
-            url = f"{self.base_url}/v3/snapshot/options/{occ}"
-            params = {"apiKey": self.api_key}
-            resp = requests.get(url, params=params, timeout=5)
+            url = f"{self.base_url}/v3/snapshot/options/{underlying.upper()}"
+            params = {
+                "apiKey": self.api_key,
+                "expiration_date": expiration_date,
+                "strike_price": strike,
+                "contract_type": contract_type,
+                "limit": 1  # just get the matching contract
+            }
 
-            # If 404, fallback to chain below
+            resp = requests.get(url, params=params, timeout=6)
             if resp.status_code == 404:
-                logging.warning(f"[Polygon] Single snapshot not found for {occ}, trying chain...")
-                return self._get_option_from_chain(underlying, expiry, strike, right)
-
+                logging.warning(f"[Polygon] Snapshot not found for {underlying} {strike}{right} {expiry}")
+                return None
             resp.raise_for_status()
-            resp_json = resp.json()
-            data = resp_json.get("results", {})
 
-            # Handle both dict and list formats
-            if isinstance(data, list):
-                if len(data) == 0:
-                    logging.warning(f"[Polygon] Empty results list for {occ}, trying chain...")
-                    return self._get_option_from_chain(underlying, expiry, strike, right)
-                elif isinstance(data[0], dict):
-                    data = data[0]
-                else:
-                    logging.error(f"[Polygon] Unexpected inner list type: {type(data[0])}")
-                    return None
-            elif not isinstance(data, dict):
-                logging.error(f"[Polygon] Unexpected snapshot format: {type(data)}")
+            payload = resp.json()
+            results = payload.get("results", [])
+            if not results:
+                logging.warning(f"[Polygon] Empty results for {underlying} {expiry} {strike}{right}")
                 return None
 
+            data = results[0]
             quote = data.get("last_quote", {})
             trade = data.get("last_trade", {})
-            bid, ask, last = quote.get("bid"), quote.get("ask"), trade.get("price")
-            mid = (bid + ask) / 2 if bid and ask else None
+            bid = quote.get("bid")
+            ask = quote.get("ask")
+            last = trade.get("price")
+            mid = (bid + ask) / 2 if bid and ask else last
 
             return {
-                "symbol": occ,
+                "symbol": data.get("details", {}).get("ticker"),
                 "bid": bid,
                 "ask": ask,
                 "last": last,
@@ -97,6 +93,8 @@ class PolygonService:
         except Exception as e:
             logging.error(f"[Polygon] get_option_snapshot failed: {e}")
             return None
+
+
 
     def _get_option_from_chain(self, underlying: str, expiry: str, strike: float, right: str):
         """
@@ -205,36 +203,53 @@ class PolygonService:
             logging.error(f"[Polygon] get_last_trade failed: {e}")
             return None
 
+
     def get_snapshot(self, symbol: str):
-        url = f"{self.base_url}/v2/snapshot/locale/us/markets/stocks/tickers/{symbol.upper()}"
+        """
+        Updated to latest Polygon Stocks Snapshot API (v3, 2025).
+        Retrieves real-time snapshot for a single stock ticker.
+        """
+        url = f"{self.base_url}/v3/snapshot/stocks/{symbol.upper()}"
         params = {"apiKey": self.api_key}
         try:
             resp = requests.get(url, params=params, timeout=5)
             resp.raise_for_status()
             payload = resp.json()
 
-            ticker_node = payload.get("ticker")
-            if not isinstance(ticker_node, dict):
-                logging.warning("[Polygon] snapshot 'ticker' node is not a dict (%s)", type(ticker_node))
+            results = payload.get("results", {})
+            if not isinstance(results, dict):
+                logging.warning(f"[Polygon] Unexpected results format for {symbol}: {type(results)}")
                 return None
-            #logging.info(f"ticker_node:{ticker_node}")
-            last_trade = ticker_node.get("lastTrade", {})
-            last_quote = ticker_node.get("lastQuote", {})
-            today_bar  = ticker_node.get("day", {})
-            prev_bar   = ticker_node.get("prevDay", {})
+
+            # Updated JSON keys per new spec
+            last_quote = results.get("last_quote", {})
+            last_trade = results.get("last_trade", {})
+            todays_bar = results.get("session", {}) or results.get("day", {})
+            prev_bar   = results.get("previous_session", {}) or results.get("prev_day", {})
+
+            bid = last_quote.get("bid")
+            ask = last_quote.get("ask")
+            last = last_trade.get("price")
+            high = todays_bar.get("high")
+            low  = todays_bar.get("low")
+            prev_high = prev_bar.get("high")
+            prev_low  = prev_bar.get("low")
 
             return {
-                "last":       last_trade.get("p"),
-                "bid":        last_quote.get("p"),   # best bid price
-                "ask":        last_quote.get("P"),   # best ask price
-                "today_high": today_bar.get("h"),
-                "today_low":  today_bar.get("l"),
-                "prev_high":  prev_bar.get("h"),
-                "prev_low":   prev_bar.get("l"),
+                "last": last,
+                "bid": bid,
+                "ask": ask,
+                "today_high": high,
+                "today_low": low,
+                "prev_high": prev_high,
+                "prev_low": prev_low,
             }
+
         except Exception as e:
-            logging.error("[Polygon] get_snapshot failed: %s", e)
+            logging.error(f"[Polygon] get_snapshot failed: {e}")
             return None
+
+
 
     def _get_premarket_aggregates(self, symbol: str) -> Optional[Dict]:
         """
