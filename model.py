@@ -176,7 +176,21 @@ class GeneralApp:
         return self._tws.place_custom_order(order)
 
     def get_option_premium(self, symbol: str, expiry: str, strike: float, right: str):
-        return self.tws.get_option_premium(symbol,expiry,strike, right)
+        """
+        Returns option premium using ONLY TWS snapshot (Polygon fully bypassed).
+        """
+        if not self._tws:
+            raise RuntimeError("GeneralApp: TWS not connected")
+        try:
+            snap = self._tws.get_option_snapshot(symbol, expiry, strike, right)
+            if snap and snap.get("mid"):
+                return snap["mid"]
+            logging.warning(f"[GeneralApp] No mid-price from TWS snapshot for {symbol}")
+            return None
+        except Exception as e:
+            logging.error(f"[GeneralApp] Failed to fetch TWS premium: {e}")
+            return None
+
 
     def get_option_snapshot(self, symbol: str, expiry: str, strike: float, right: str):
         """
@@ -187,7 +201,6 @@ class GeneralApp:
         if not self._tws:
             raise RuntimeError("GeneralApp: TWS not connected")
         twsshot = self._tws.get_option_snapshot(symbol, expiry, strike, right)
-        #polygotshot = self.tws.get_option_snapshot(symbol,expiry, strike, right)
         return twsshot
 
     def connect(self) -> bool:
