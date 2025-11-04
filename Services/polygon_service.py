@@ -204,52 +204,51 @@ class PolygonService:
             return None
 
 
+    
     def get_snapshot(self, symbol: str):
         """
-        Retrieves real-time snapshot for a single stock ticker.
-        Corrected to use Polygon v2 single-ticker endpoint.
+        Real-time L1 snapshot for a single stock – Polygon v2 Pro endpoint.
         """
-        url = f"{self.base_url}/v2/snapshot/locale/us/markets/stocks/tickers/{symbol.upper()}"
+        url = f"https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/{symbol.upper()}"
         params = {"apiKey": self.api_key}
 
         try:
-            resp = requests.get(url, params=params, timeout=5)
-            resp.raise_for_status()
-            payload = resp.json()
+            r = requests.get(url, params=params, timeout=5)
+            r.raise_for_status()                       # <-- fail fast on 4xx/5xx
+            payload = r.json()
 
-            ticker_node = payload.get("ticker")
+            # Polygon sometimes nests under 'results' instead of 'ticker'
+            ticker_node = payload.get("ticker") or payload.get("results")
             if not isinstance(ticker_node, dict):
-                logging.warning(f"[Polygon] Unexpected format for {symbol}: {type(ticker_node)}")
+                logging.warning(
+                    "[Polygon] Unexpected payload for %s: %s",
+                    symbol,
+                    payload  # full body for inspection
+                )
                 return None
 
             last_trade = ticker_node.get("lastTrade", {})
             last_quote = ticker_node.get("lastQuote", {})
-            day_bar = ticker_node.get("day", {})
-            prev_day = ticker_node.get("prevDay", {})
-
-            bid = last_quote.get("bid")
-            ask = last_quote.get("ask")
-            last = last_trade.get("price")
-            high = day_bar.get("high")
-            low = day_bar.get("low")
-            prev_high = prev_day.get("high")
-            prev_low = prev_day.get("low")
+            day_bar    = ticker_node.get("day", {})
+            prev_day   = ticker_node.get("prevDay", {})
 
             return {
-                "last": last,
-                "bid": bid,
-                "ask": ask,
-                "today_high": high,
-                "today_low": low,
-                "prev_high": prev_high,
-                "prev_low": prev_low,
+                "last":      last_trade.get("p"),  # Polygon uses 'p' for price
+                "bid":       last_quote.get("p"),  # bid price
+                "ask":       last_quote.get("P"),  # ask price
+                "today_high": day_bar.get("h"),
+                "today_low":  day_bar.get("l"),
+                "prev_high":  prev_day.get("h"),
+                "prev_low":   prev_day.get("l"),
             }
 
+        except requests.HTTPError as e:
+            logging.error("[Polygon] HTTP error for %s: %s  body=%s",
+                        symbol, e, r.text)
         except Exception as e:
-            logging.error(f"[Polygon] get_snapshot failed: {e}")
-            return None
+            logging.error("[Polygon] get_snapshot failed for %s: %s", symbol, e)
 
-
+        return None
 
 
     def _get_premarket_aggregates(self, symbol: str) -> Optional[Dict]:
