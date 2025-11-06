@@ -534,8 +534,10 @@ class AppModel:
         
         # ⚡ FIX: Check if the returned float premium is valid ⚡
         if premium is None or premium <= 0:
-            logging.error("place_option_order: Failed to get option premium (TWS/Polygon fallback failed)")
-            raise RuntimeError("No option premium available for order price calculation")
+            logging.warning("place_option_order: No live premium → guessing fallback price from underlying.")
+            # derive pseudo-premium as 1% of underlying, minimum 0.1
+            premium = max(round((current_price or 1) * 0.01, 2), 0.1)
+
 
         # Use the premium (mid-price) directly
         mid_premium = premium + arcTick
