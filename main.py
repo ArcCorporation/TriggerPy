@@ -326,18 +326,26 @@ class ArcTriggerApp(tk.Tk):
     # ------------------------------------------------------------------
     def build_order_frames(self):
         """Create order frames based on spinbox value."""
-        for frame in self.order_frames:
-            frame.destroy()
-        self.order_frames.clear()
+        
+        ex_count = len(self.order_frames)
         try:
             count = int(self.spin_count.get())
         except ValueError:
             count = 1
-        for i in range(count):
-            # --- MODIFIED: Parent is now the inner frame of the scrollable container ---
-            frame = OrderFrame(self.order_container.scrollable_frame, order_id=i + 1)
-            frame.pack(fill="x", pady=10, padx=10)
-            self.order_frames.append(frame)
+
+        if count > ex_count:
+            diff = count - ex_count
+            for i in range(diff):
+                # --- MODIFIED: Parent is now the inner frame of the scrollable container ---
+                frame = OrderFrame(self.order_container.scrollable_frame, order_id=i + 1)
+                frame.pack(fill="x", pady=10, padx=10)
+                self.order_frames.append(frame)
+        else:
+            diff = ex_count - count
+            for i in range(diff):
+                frame = self.order_frames.pop()
+                frame.destroy()
+
 
     # ------------------------------------------------------------------
     #  DEBUG CONSOLE
