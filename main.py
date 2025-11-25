@@ -73,6 +73,8 @@ class ArcTriggerApp(tk.Tk):
         tk.Button(top_frame, text="Start Trigger", bg="red", fg="white", command=self.build_order_frames).pack(side="left", padx=10)
         tk.Button(top_frame, text="Show Debug", command=self.toggle_debug).pack(side="left", padx=10)
         ttk.Button(top_frame, text="Watchers", command=self.show_watchers).pack(side="left", padx=5)
+        ttk.Button(top_frame, text="Positions", command=self.show_positions).pack(side="left", padx=5)
+
         # Removed: ttk.Button(top_frame, text="Finalized Orders", ...)
 
         # --- MODIFIED: Order container ---
@@ -98,6 +100,12 @@ class ArcTriggerApp(tk.Tk):
             logging.info("[ArcTriggerApp] Previous session auto-restored.")
         else:
             logging.info("[ArcTriggerApp] No recent session to restore.")
+
+    
+    def show_positions(self):
+        from opmng_ui import open_positions_window
+        open_positions_window(self)
+
 
     def save_session(self, filename: str = "arctrigger.dat", background: bool = False):
         """
