@@ -229,9 +229,10 @@ class OptionsManager:
         • TP > 40% → warning signal
         """
 
-        if pos.stale or pos.unrealized_pnl is None:
+        if pos.mid == None or pos.stale or pos.unrealized_pnl is None:
             return
-
+        
+            
         # pct return on premium
         pct = (pos.mid - pos.avg_price) / pos.avg_price
 
