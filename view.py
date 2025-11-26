@@ -672,6 +672,8 @@ class OrderFrame(tk.Frame):
             return
         def worker():
             try:
+                if is_market_closed_or_pre_market():
+                    self.model.cancel_queued()
                 pending = self.model.order
                 
                 self.model.cancel_pending_order(pending.order_id)

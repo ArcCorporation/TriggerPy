@@ -34,6 +34,26 @@ class OrderQueueService:
             t.start()
             logging.info("[OrderQueueService] Market-open monitor thread started.")
 
+    
+    def cancel_queued_actions_for_model(self, model):
+        """Remove ALL queued actions belonging to this model."""
+        with self._lock:
+            before = len(self._queued_actions)
+            self._queued_actions = [
+                (m, a, k) for (m, a, k) in self._queued_actions
+                if m is not model
+            ]
+            after = len(self._queued_actions)
+
+        logging.info(
+            f"[OrderQueueService] Cancelled {before - after} queued actions for {model.symbol}"
+        )
+
+        # notify UI
+        if hasattr(model, "_status_callback") and model._status_callback:
+            model._status_callback("Queued order cancelled.", "red")
+
+
     # ------------------------------------------------------------------
     # MONITOR LOOP
     # ------------------------------------------------------------------

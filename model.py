@@ -30,6 +30,9 @@ class GeneralApp:
         self._connected = False
         self._models = set()
 
+    
+
+
     def save(self, filename: Optional[str] = "ARCTRIGGER.DAT") -> str:
         """
         Save all models to ARCTRIGGER.DAT (or given filename) in this format:
@@ -292,6 +295,9 @@ class AppModel:
         self._take_profit: Optional[float] = None
         self._order: Optional[Order] = None
         self._status_callback: Optional[callable] = None  # added
+
+    def cancel_queued(self):
+        order_queue.cancel_queued_actions_for_model(self)
 
     # ------------------------------------------------------------------
     def set_status_callback(self, fn):
