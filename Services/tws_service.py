@@ -229,6 +229,8 @@ class TWSService(EWrapper, EClient):
 
                 # 2.  CHANGE STATE LAST
                 custom_order.mark_finalized(result=f"Filled {filled} @ {avgFillPrice}")
+                if hasattr(custom_order, "_fill_event"):
+                    custom_order._fill_event.set()
                 logging.info(f"[TWSService] Order {custom_uuid} FINALIZED "
                             f"(filled={filled} @ {avgFillPrice})")
 
