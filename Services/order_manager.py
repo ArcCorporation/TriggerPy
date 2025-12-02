@@ -76,7 +76,18 @@ class OrderManager:
                 contract = self.tws_service.create_option_contract(
                     pos["symbol"], pos["expiry"], pos["strike"], pos["right"]
                 )
-                logging.info(f"[OrderManager] Contract resolved: {contract}")
+                
+                # --- 💡 FIX START: Resolve ConID 💡 ---
+                # Without this, TWS treats this as a generic contract request, 
+                # which often fails for closing orders or returns error 200/321.
+                conid = self.tws_service.resolve_conid(contract)
+                if not conid:
+                    raise ValueError(f"Could not resolve conId for {pos['symbol']} {pos['expiry']}")
+                
+                contract.conId = conid
+                logging.info(f"[OrderManager] Contract resolved: {contract} (conId: {contract.conId})")
+                # --- FIX END ---
+
             except Exception as e:
                 logging.exception(f"[OrderManager] Failed to create option contract for {pos}: {e}")
                 logging.info("="*80)
