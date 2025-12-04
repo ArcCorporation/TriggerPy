@@ -526,6 +526,28 @@ class AppModel:
         if not self._validate_breakout_trigger(trigger_price, current_price):
             raise ValueError(f"Trigger {trigger_price} invalid for current price {current_price}")
         
+
+        premium = general_app.get_option_premium(
+            self._symbol, self._expiry, self._strike, self._right
+        )
+
+        if premium is None or premium <= 0:
+            logging.warning("place_option_order: No live premium → using fallback from underlying.")
+            premium = max(round((current_price or 1) * 0.01, 2), 0.1)
+
+        mid_premium = premium + arcTick
+
+        # --- 4. tick rounding ---
+        if mid_premium < 3:
+            tick = 0.01
+        elif mid_premium >= 5:
+            tick = 0.15
+        else:
+            tick = 0.05
+
+        mid_premium = int(round(mid_premium / tick)) * tick
+        mid_premium = round(mid_premium, 2)
+        
         order = Order(
             symbol=self._symbol,
             expiry=self._expiry,
