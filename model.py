@@ -2,7 +2,7 @@ import logging
 from typing import List, Dict, Optional, Tuple
 import uuid
 from Services.price_watcher import PriceWatcher
-from Services.tws_service import create_tws_service
+from Services.tws_service import create_tws_service, TWSService
 from Services.polygon_service import polygon_service
 from Services.order_wait_service import wait_service
 from Services.order_manager import order_manager
@@ -23,14 +23,17 @@ def align_expiry_to_friday(expiry: str) -> str:
 
 # --- Singleton: GeneralApp ---
 class GeneralApp:
-    def __init__(self):
-        self._tws = None
+    def __init__(self, tws : TWSService = create_tws_service()):
+        self._tws = tws
         self._polygon = None
         self._order_wait = None
         self._connected = False
         self._models = set()
 
     
+
+    def pre_conid(self,order : Order):
+        return self._tws.pre_conid(order)
 
 
     def save(self, filename: Optional[str] = "ARCTRIGGER.DAT") -> str:
@@ -522,6 +525,21 @@ class AppModel:
 
         if not self._validate_breakout_trigger(trigger_price, current_price):
             raise ValueError(f"Trigger {trigger_price} invalid for current price {current_price}")
+        
+        order = Order(
+            symbol=self._symbol,
+            expiry=self._expiry,
+            strike=self._strike,
+            right=self._right,
+            type=type,
+            qty=quantity,
+            entry_price=mid_premium,
+            tp_price=self._take_profit,
+            sl_price=self._stop_loss,
+            action=action.upper(),
+            trigger=trigger_price,
+        )
+        order.set_position_size(float(position))
 
         # --- 2. queue during premarket ---
         if is_market_closed_or_pre_market():
@@ -530,6 +548,7 @@ class AppModel:
             if status_callback:
                 status_callback(status, "orange")
             order_queue.queue_action(self, action, position, quantity, trigger_price, status_callback, arcTick, type)
+            general_app.pre_conid(order)
             return {}
 
         # --- 3. premium discovery ---

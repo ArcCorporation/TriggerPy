@@ -39,6 +39,8 @@ class TWSService(EWrapper, EClient):
         
         self._request_counter = 1
         self.symbol_samples = {}
+        self._pre_conid_cache = {}   # key: (symbol, expiry, strike, right) → conId
+
         # Track custom orders from Helpers.Order
         self.option_chains = {}  # Add this line
         self._pending_orders = {}  # custom_order_id -> Helpers.Order object
@@ -644,6 +646,53 @@ class TWSService(EWrapper, EClient):
                 pass
             self.tickPrice = original_tick
 
+    def pre_conid(self, custom_order: Order) -> bool:
+        """
+        Pre-resolve conId BEFORE order placement.
+        Useful for pre-market where we want everything ready.
+        """
+        logging.info(f"[TWSSwervice] doing pre-conid for order: {custom_order}")
+        try:
+            key = (
+                custom_order.symbol.upper(),
+                custom_order.expiry,
+                float(custom_order.strike),
+                custom_order.right.upper(),
+            )
+
+            # 1. Already cached?
+            if key in self._pre_conid_cache:
+                conid = self._pre_conid_cache[key]
+                custom_order._pre_conid = conid
+                logging.info(f"[TWSService] pre_conid CACHE HIT {key} → {conid}")
+                return True
+
+            # 2. Build contract
+            contract = self.create_option_contract(
+                symbol=custom_order.symbol,
+                last_trade_date=custom_order.expiry,
+                strike=custom_order.strike,
+                right=custom_order.right,
+            )
+
+            # 3. Resolve it
+            conid = self.resolve_conid(contract)
+            if not conid:
+                logging.error(f"[TWSService] pre_conid FAILED {key}")
+                return False
+
+            # 4. Save to cache
+            self._pre_conid_cache[key] = conid
+            custom_order._pre_conid = conid
+
+            logging.info(f"[TWSService] pre_conid READY {key} → {conid}")
+            return True
+
+        except Exception as e:
+            logging.error(f"[TWSService] pre_conid ERROR {e}")
+            return False
+
+
     def place_custom_order(self, custom_order: Order, account: str = "") -> bool:
         """
         Place an order using your custom Order object from Helpers.Order.
@@ -666,7 +715,17 @@ class TWSService(EWrapper, EClient):
             )
 
             # ✅ Resolve contract to avoid error 200
-            conid = self.resolve_conid(contract)
+            key = (
+                custom_order.symbol.upper(),
+                custom_order.expiry,
+                float(custom_order.strike),
+                custom_order.right.upper(),
+            )
+            precon = self._pre_conid_cache.get(key)
+            if precon:
+                conid = precon 
+            else:
+                conid = self.resolve_conid(contract)
             if not conid:
                 logging.error(f"Could not resolve contract for {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right}")
                 custom_order.mark_failed("Contract resolution failed")
