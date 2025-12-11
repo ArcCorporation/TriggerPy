@@ -735,11 +735,11 @@ class TWSService(EWrapper, EClient):
 
             # --- Premium snapshot ---
             # NOTE: We use get_option_premium now for a robust (Polygon fallback) price
-            premium = self.get_option_premium(custom_order.symbol, custom_order.expiry, custom_order.strike, ib_right)
-            if not premium or premium <= 0:
-                raise RuntimeError(f"No live premium for {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right}")
+            #premium = self.get_option_premium(custom_order.symbol, custom_order.expiry, custom_order.strike, ib_right)
+            #if not premium or premium <= 0:
+                #raise RuntimeError(f"No live premium for {custom_order.symbol} {custom_order.expiry} {custom_order.strike}{ib_right}")
 
-            base_price = custom_order.entry_price or premium
+            base_price = custom_order.entry_price #or premium
 
             # ✅ FIXED QTY CALC
             if getattr(custom_order, "_position_size", None):
@@ -748,12 +748,20 @@ class TWSService(EWrapper, EClient):
                 # fallback to manually set qty (legacy behavior)
                 qty = custom_order.qty if getattr(custom_order, "qty", None) else 1
 
+            #Safety clamp
+            notional = qty * base_price * 100
+            if notional > custom_order._position_size *1.5:
+                 logging.error(
+                    f"[RISK-GUARD] {custom_order.symbol} notional {notional:.2f} > 1.5× target {custom_order._position_size}. "
+                    f"premium_used={base_price}, qty={qty}. Blocking order."
+                )
+                 return False
             custom_order.qty = qty
 
             # Debug info
             logging.info(
                 f"[TWSService] Calculated qty={qty} for {custom_order.symbol} "
-                f"premium={premium}, position_size={getattr(custom_order, '_position_size', None)}"
+                f"premium={base_price}, position_size={getattr(custom_order, '_position_size', None)}"
             )
 
             # --- Build IB order ---

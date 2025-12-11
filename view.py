@@ -214,7 +214,7 @@ class OrderFrame(tk.Frame):
 
         frame_pos_btns = ttk.Frame(self)
         frame_pos_btns.grid(row=3, column=0, columnspan=2, pady=2)
-        for val in [500, 1000, 2000, 5000]:
+        for val in [ 100, 500, 1000, 2000]:
             ttk.Button(
                 frame_pos_btns, text=str(val),
                 command=lambda v=val: self._set_pos_and_recalc(v)

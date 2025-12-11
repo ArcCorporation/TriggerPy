@@ -38,7 +38,7 @@ class PolygonService:
 
 
         # Background websocket start
-        self._start_ws()
+        #self._start_ws()
 
     # ---------------- REST METHODS ----------------
     def get_option_snapshot(self, underlying: str, expiry: str, strike: float, right: str):
