@@ -290,6 +290,7 @@ class OrderFrame(tk.Frame):
         self.btn_save.pack(side="left", padx=5)
         ttk.Button(frame_ctrl, text="Cancel Order", command=self.cancel_order).pack(side="left", padx=5)
         ttk.Button(frame_ctrl, text="Reset", command=self.reset).pack(side="left", padx=5)
+        ttk.Button(frame_ctrl, text="REBASE TRIGGER(PRE MARKET ACTION)", command=self._on_pm_high_rebase).pack(side="left", padx=5)
 
         # --- Status ---
         self.lbl_status = ttk.Label(self, text="Select symbol to start", foreground="gray")
@@ -548,6 +549,22 @@ class OrderFrame(tk.Frame):
         pass
 
     # ---------- actions ----------
+    def _on_pm_high_rebase(self):
+        def worker():
+            new_trigger = self.model.rebase_premarket_to_new_extreme()
+            if not new_trigger:
+                self._ui(lambda: self._set_status("PM rebase failed", "red"))
+                return
+
+            def apply():
+                self.entry_trigger.delete(0, tk.END)
+                self.entry_trigger.insert(0, f"{new_trigger:.2f}")
+                self._populate_strike_combo(new_trigger)
+
+            self._ui(apply)
+
+        threading.Thread(target=worker, daemon=True).start()
+
     
     def place_order(self):
         if not self.model or not self.current_symbol:
@@ -678,6 +695,7 @@ class OrderFrame(tk.Frame):
                 
                 self.model.cancel_pending_order(pending.order_id)
                 self._ui(lambda: self._set_status("Pending orders cancelled", "orange"))
+                self.btn_save.config(state="normal")
             except Exception as e:
                 logging.error(f"Cancel error: {e}")
         threading.Thread(target=worker, daemon=True).start()

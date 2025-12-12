@@ -19,6 +19,41 @@ class OrderQueueService:
     # ------------------------------------------------------------------
     # PUBLIC ENTRY
     # ------------------------------------------------------------------
+    def rebase_queued_premarket_order(
+    self,
+    model,
+    new_trigger: float
+) -> bool:
+        """
+        Update the trigger price of an already queued premarket order
+        for the given model. Returns True if updated.
+        """
+        with self._lock:
+            for i, (m, args, kwargs) in enumerate(self._queued_actions):
+                if m is model:
+                    # args layout (from place_option_order queue):
+                    # action, position, quantity, trigger_price, status_callback, arcTick, type
+                    args = list(args)
+                    args[3] = new_trigger  # 🔥 replace trigger_price
+                    self._queued_actions[i] = (m, tuple(args), kwargs)
+
+                    logging.info(
+                        f"[OrderQueueService] Rebasing queued order for {model.symbol} → trigger {new_trigger}"
+                    )
+
+                    if model._status_callback:
+                        model._status_callback(
+                            f"Queued order rebased to trigger {new_trigger:.2f}",
+                            "blue"
+                        )
+                    return True
+
+        logging.warning(
+            f"[OrderQueueService] No queued action found to rebase for {model.symbol}"
+        )
+        return False
+
+
     def queue_action(self, model, *args, **kwargs):
         """Store the AppModel.place_option_order() call for deferred execution."""
         with self._lock:

@@ -373,6 +373,55 @@ class AppModel:
         except Exception as e:
             logging.error(f"AppModel[{self._symbol}]: Failed to get market price: {e}")
             return None
+    
+
+    def rebase_premarket_to_new_extreme(self) -> Optional[float]:
+        """
+        Rebase queued premarket order trigger to latest
+        premarket high (CALL) or low (PUT).
+        Also updates internal strike to ATM.
+        Returns new trigger if successful.
+        """
+        if not self._right:
+            logging.warning(f"[{self._symbol}] Cannot rebase: right not set")
+            return None
+
+        # 1. Get latest PM extreme
+        market_data = general_app.get_market_data_for_trigger(self._symbol, 'premarket')
+        if not market_data:
+            return None
+
+        new_trigger = (
+            market_data["high"] if self._right == "C"
+            else market_data["low"]
+        )
+
+        if not new_trigger or new_trigger <= 0:
+            return None
+
+        # 2. Compute ATM strike from trigger
+        step = 2.5  # model-level decision; UI can override visually
+        if self._right == "C":
+            new_strike = int(new_trigger / step) * step + step
+        else:
+            new_strike = int(new_trigger / step) * step
+
+        self._strike = round(new_strike, 2)
+
+        # 3. Rebase queued action
+        success = order_queue.rebase_queued_premarket_order(
+            self,
+            new_trigger=new_trigger
+        )
+
+        if success:
+            logging.info(
+                f"[{self._symbol}] Premarket rebase → trigger {new_trigger}, strike {self._strike}"
+            )
+            return new_trigger
+
+        return None
+
 
     # ---------------- Option & Risk ----------------
     def set_option_contract(self, expiry: str, strike: float, right: str) -> Tuple[str, float, str]:
@@ -601,21 +650,6 @@ class AppModel:
         if self._take_profit is None:
             self._take_profit = round(mid_premium * 1.2, 2)
 
-        # --- 6. build order ---
-        order = Order(
-            symbol=self._symbol,
-            expiry=self._expiry,
-            strike=self._strike,
-            right=self._right,
-            type=type,
-            qty=quantity,
-            entry_price=mid_premium,
-            tp_price=self._take_profit,
-            sl_price=self._stop_loss,
-            action=action.upper(),
-            trigger=trigger_price,
-        )
-        order.set_position_size(float(position))
 
         cb = status_callback or self._status_callback
         if cb:
