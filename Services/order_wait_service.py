@@ -41,40 +41,81 @@ class OrderWaitService:
         """
         delay = 2
         last = 0
+
+        logging.info(f"[WaitService] Snapshot thread started | order_id={order_id} | symbol={order.symbol}")
+
         try:
             while runtime_man.is_run() and order.state == OrderState.PENDING:
+                logging.info(f"[WaitService] Loop tick | order_id={order_id} | state={order.state}")
+
                 with self.lock:
-                    if order_id not in self.pending_orders or order_id in self.cancelled_orders:
+                    if order_id not in self.pending_orders:
+                        logging.info(f"[WaitService] Order missing from pending_orders | order_id={order_id}")
                         watcher_info.remove(order_id)
                         return
-                
+
+                    if order_id in self.cancelled_orders:
+                        logging.info(f"[WaitService] Order found in cancelled_orders | order_id={order_id}")
+                        watcher_info.remove(order_id)
+                        return
+
+                logging.info(f"[WaitService] Fetching snapshot | symbol={order.symbol}")
                 snap = self.polygon.get_snapshot(order.symbol)
+
                 if not snap:
+                    logging.info(f"[WaitService] Empty snapshot received | symbol={order.symbol}")
                     time.sleep(self.poll_interval)
                     continue
 
                 last_price = snap.get("last")
-                msg = f"[WaitService] Poll {order.symbol} → {last_price}"
                 now = time.time()
-                
+
+                logging.info(
+                    f"[WaitService] Snapshot received | symbol={order.symbol} | last_price={last_price}"
+                )
+
                 if now - last > delay:
-                    logging.info(msg)
-                    print(msg)
+                    logging.info(
+                        f"[WaitService] Poll interval log | symbol={order.symbol} | price={last_price}"
+                    )
                     last = now
 
                 if last_price:
+                    logging.info(
+                        f"[WaitService] Updating thread status | order_id={order_id} | price={last_price}"
+                    )
                     tinfo.update_status(STATUS_RUNNING, last_price=last_price)
 
                 if last_price and order.is_triggered(last_price):
+                    logging.info(
+                        f"[WaitService] Trigger condition met | order_id={order_id} | trigger_price={last_price}"
+                    )
+
                     self._finalize_order(order_id, order, tinfo, last_price)
+
                     with self.lock:
                         if order_id in self.pending_orders:
+                            logging.info(
+                                f"[WaitService] Removing order from pending_orders | order_id={order_id}"
+                            )
                             del self.pending_orders[order_id]
+
+                    logging.info(
+                        f"[WaitService] Snapshot thread exiting after trigger | order_id={order_id}"
+                    )
                     return
 
+                logging.info(
+                    f"[WaitService] Sleeping for poll interval | seconds={self.poll_interval}"
+                )
                 time.sleep(self.poll_interval)
+
         except Exception as e:
+            logging.info(
+                f"[WaitService] Exception in snapshot thread | order_id={order_id} | error={str(e)}"
+            )
             tinfo.update_status(STATUS_FAILED, info={"error": str(e)})
+
 
     def start_trigger_watcher(self, order: Order, mode: str = "ws") -> threading.Thread:
         """
