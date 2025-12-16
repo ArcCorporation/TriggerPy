@@ -2,7 +2,7 @@ import threading
 import time
 import logging
 from datetime import datetime
-from Services.nasdaq_info import is_market_closed_or_pre_market
+from Services.nasdaq_info import is_market_closed_or_pre_market, rth_proximity_factor
 from Services.tws_service import create_tws_service, TWSService
 from Services.polygon_service import polygon_service, PolygonService
 
@@ -96,19 +96,21 @@ class OrderQueueService:
         logging.info("[OrderQueueService] Monitoring for market open...")
         while self._running:
             try:
+                delay = rth_proximity_factor()
                 if not is_market_closed_or_pre_market():
                     logging.info("[OrderQueueService] Market is OPEN → replaying queued actions.")
                     self._on_market_open()
-                    time.sleep(60)
+                    return None
                 else:
                     with self._lock:
                         count = len(self._queued_actions)
                     if count > 0:
                         logging.info(f"[OrderQueueService] Market closed/pre-market. {count} action(s) queued.")
-                    time.sleep(5)
+                    
+                    time.sleep(delay)
             except Exception as e:
                 logging.error(f"[OrderQueueService] Monitor loop error: {e}")
-                time.sleep(10)
+                time.sleep(delay)
 
     # ------------------------------------------------------------------
     # EXECUTION LOGIC

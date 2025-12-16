@@ -53,6 +53,27 @@ def time_until_close_or_open(now: datetime = None) -> timedelta:
             next_open = datetime.combine(next_day.date(), MARKET_OPEN, tzinfo=EASTERN)
             return next_open - now
 
+def rth_proximity_factor(now: datetime = None) -> int:
+    """
+    Returns:
+    - 10 if time to regular trading hours (09:30 ET) is MORE than 10 minutes
+    - 1  if we are within 10 minutes of RTH
+    """
+    if now is None:
+        now = datetime.now(EASTERN)
+    else:
+        now = now.astimezone(EASTERN)
+
+    # If market is already open, we are effectively at RTH
+    if is_market_open(now):
+        return 1
+
+    # Calculate time until next market open
+    delta = time_until_close_or_open(now)
+
+    return 1 if delta <= timedelta(minutes=10) else 10
+
+
 
 def market_status_string(now: datetime = None) -> str:
     """
