@@ -550,6 +550,82 @@ class AppModel:
             logging.error(f"AppModel[{self._symbol}]: Breakout violation trigger {trigger_price} vs {current_price}")
             return False
         return True
+    
+    ### OK very interesting method
+    def prepare_option_order(
+    self,
+    action: str = "BUY",
+    position: int = 2000,
+    quantity: int = 1,
+    trigger_price: Optional[float] = None,
+    arcTick: float = 0.01,
+    type: str = "LMT",
+    status_callback=None,
+) -> Order:
+
+        # --- 0. normalize expiry ---
+        self._expiry = align_expiry_to_friday(self._expiry)
+
+        if not all([self._symbol, self._expiry, self._strike, self._right]):
+            raise ValueError("Option parameters not set")
+
+        # --- 1. underlying price (SLOW) ---
+        current_price = self.refresh_market_price()
+        if not current_price:
+            raise ValueError("Underlying price unavailable")
+
+        if not self._validate_breakout_trigger(trigger_price, current_price):
+            raise ValueError("Invalid breakout trigger")
+
+        # --- 2. option premium (SLOW – ONCE) ---
+        premium = general_app.get_option_premium(
+            self._symbol, self._expiry, self._strike, self._right
+        )
+
+        if premium is None or premium <= 0:
+            premium = max(round(current_price * 0.01, 2), 0.1)
+
+        # --- 3. tick rounding ---
+        mid = premium + arcTick
+        if mid < 3:
+            tick = 0.01
+        elif mid >= 5:
+            tick = 0.15
+        else:
+            tick = 0.05
+
+        entry_price = round(int(mid / tick) * tick, 2)
+
+        # --- 4. SL / TP defaults ---
+        sl = self._stop_loss or round(entry_price * 0.8, 2)
+        tp = self._take_profit or round(entry_price * 1.2, 2)
+
+        # --- 5. build order ---
+        order = Order(
+            symbol=self._symbol,
+            expiry=self._expiry,
+            strike=self._strike,
+            right=self._right,
+            type=type,
+            qty=quantity,
+            entry_price=entry_price,
+            tp_price=tp,
+            sl_price=sl,
+            action=action.upper(),
+            trigger=trigger_price,
+        )
+        order.set_position_size(float(position))
+
+        # --- 6. attach callback EARLY ---
+        cb = status_callback or self._status_callback
+        if cb:
+            order.set_status_callback(cb)
+
+        # --- 7. resolve IB contract (SLOW) ---
+        general_app.pre_conid(order)
+
+        return order
+
 
     def place_option_order(
         self,
@@ -611,7 +687,7 @@ class AppModel:
             trigger=trigger_price,
         )
         order.set_position_size(float(position))
-
+        order._order_ready = True
         # --- 2. queue during premarket ---
         if is_market_closed_or_pre_market():
             status = f"AppModel[{self._symbol}]: Premarket → queuing place_option_order() for RTH."
@@ -695,6 +771,45 @@ class AppModel:
 
         self._order = order
         return order.to_dict()
+    
+    def prepare_almost_option_order(
+    self,
+    action: str = "BUY",
+    position: int = 2000,
+    quantity: int = 1,
+    trigger_price: Optional[float] = None,
+    arcTick: float = 0.01,
+    type: str = "LMT",
+    status_callback=None,
+) -> Order:
+        logging.info(f"Preparing alkmost order ARC STYLE FOR {self.symbol}")
+        order = Order(
+            symbol=self._symbol,
+            expiry=self._expiry,
+            strike=self._strike,
+            right=self._right,
+            type=type,
+            qty=quantity,
+            entry_price=1 + arcTick,
+            tp_price=self._take_profit,
+            sl_price=self._stop_loss,
+            action=action.upper(),
+            trigger=trigger_price,
+            appmodel=self
+        )
+        order._args = {"action": action,
+                       "position":position,
+                       "quantity": quantity,
+                       "trigger_price": trigger_price,
+                       "arcTick":arcTick,
+                       "type": type,
+                       "status_callback":status_callback}
+        order.set_position_size(position)
+        order.set_status_callback(status_callback)
+        order._order_ready = False
+        general_app.add_order(order)
+        return order
+        
 
 
 

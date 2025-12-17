@@ -4,6 +4,7 @@ import uuid
 import enum
 from ibapi.order import Order as IBOrder  # import IB's order class
 import logging
+from model import AppModel
 
 class OrderState(enum.Enum):
     PENDING = "pending"
@@ -35,7 +36,7 @@ class OrderState(enum.Enum):
 class Order:
     def __init__(self, symbol, expiry, strike, right,
                  qty, entry_price, tp_price, sl_price,
-                 action="BUY", type="LMT", trigger=None):
+                 action="BUY", type="LMT", trigger=None, appmodel: AppModel = None):
         """
         Temel Order nesnesi.
         """
@@ -57,6 +58,9 @@ class Order:
         self.state = OrderState.PENDING if trigger else OrderState.ACTIVE
         self._fill_event = threading.Event()
         self.result = None  # finalize edildiğinde TWS’ten dönen order id seti
+        self._order_ready = False
+        self._model = appmodel
+        self._args = dict()
 
     # ----------------------------------------------------------------------
     # Status Callback Handling (added)

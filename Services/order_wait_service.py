@@ -47,6 +47,20 @@ class OrderWaitService:
         try:
             while runtime_man.is_run() and order.state == OrderState.PENDING:
                 logging.info(f"[WaitService] Loop tick | order_id={order_id} | state={order.state}")
+                logging.info(f"[WaitService] checking if order is ready or not?")
+                if not order._order_ready:
+                    logging.info(f"[WaitService] Lorder not ready lets fix that....")
+                    model = order._model
+                    _args = order._args
+                    _order = model.prepare_option_order(action= _args["action"]
+                                                        ,position=_args["position"]
+                                                        ,quantity=_args["quantity"]
+                                                        ,trigger_price=_args["trigger_price"]
+                                                        ,arcTick=_args["arcTick"]
+                                                        ,type="LMT"
+                                                        ,status_callback=_args["status_callback"])
+                    order = _order
+                    logging.info(f"[WitService] BEWARE ORDER COMPLETLY PREPARED IN WATCHER: {order}")
 
                 with self.lock:
                     if order_id not in self.pending_orders:
