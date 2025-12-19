@@ -5,7 +5,7 @@ from datetime import datetime
 from Services.nasdaq_info import is_market_closed_or_pre_market, rth_proximity_factor
 from Services.tws_service import create_tws_service, TWSService
 from Services.polygon_service import polygon_service, PolygonService
-from model import AppModel
+#from model import AppModel
 class OrderQueueService:
     def __init__(self, tws: TWSService = create_tws_service(), polyg: PolygonService = polygon_service):
         self._tws_service = tws
@@ -54,7 +54,7 @@ class OrderQueueService:
         return False
 
 
-    def queue_action(self, model: AppModel, *args, **kwargs):
+    def queue_action(self, model, *args, **kwargs):
         """Store the AppModel.place_option_order() call for deferred execution."""
         with self._lock:
             self._queued_actions.append((model, args, kwargs))
@@ -70,7 +70,7 @@ class OrderQueueService:
             logging.info("[OrderQueueService] Market-open monitor thread started.")
 
     
-    def cancel_queued_actions_for_model(self, model:AppModel):
+    def cancel_queued_actions_for_model(self, model):
         """Remove ALL queued actions belonging to this model."""
         with self._lock:
             before = len(self._queued_actions)
@@ -129,7 +129,7 @@ class OrderQueueService:
         for model, args, kwargs in actions:
             threading.Thread(target=self._execute_action, args=(model, args, kwargs), daemon=True).start()
 
-    def _execute_action(self, model:AppModel, args, kwargs):
+    def _execute_action(self, model, args, kwargs):
         try:
             logging.info(f"[OrderQueueService] Executing deferred place_option_order for {model.symbol}")
             #model.place_option_order(*args, **kwargs)

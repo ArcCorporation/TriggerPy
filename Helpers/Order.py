@@ -4,7 +4,7 @@ import uuid
 import enum
 from ibapi.order import Order as IBOrder  # import IB's order class
 import logging
-from model import AppModel
+#from model import AppModel
 
 class OrderState(enum.Enum):
     PENDING = "pending"
@@ -36,7 +36,7 @@ class OrderState(enum.Enum):
 class Order:
     def __init__(self, symbol, expiry, strike, right,
                  qty, entry_price, tp_price, sl_price,
-                 action="BUY", type="LMT", trigger=None, appmodel: AppModel = None):
+                 action="BUY", type="LMT", trigger=None, appmodel = None):
         """
         Temel Order nesnesi.
         """
