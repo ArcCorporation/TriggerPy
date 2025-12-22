@@ -175,7 +175,12 @@ class TWSService(EWrapper, EClient):
         else:
             logging.error(f"API Error. reqId: {reqId}, Code: {actual_error_code}, Msg: {errorString}")
 
-    def orderStatus(self,orderId,status,filled,remaining,avgFillPrice,permId,parentId,lastFillPrice,clientId,whyHeld,mktCapPrice):
+    def orderStatus(
+    self, orderId, status, filled, remaining, avgFillPrice,
+    permId, parentId, lastFillPrice, clientId, whyHeld, mktCapPrice
+):
+
+
         custom_uuid = self._ib_to_custom_id.get(orderId)
         if not custom_uuid:
             return
