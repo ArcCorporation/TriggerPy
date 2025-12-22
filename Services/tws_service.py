@@ -175,126 +175,31 @@ class TWSService(EWrapper, EClient):
         else:
             logging.error(f"API Error. reqId: {reqId}, Code: {actual_error_code}, Msg: {errorString}")
 
-    def orderStatus(
-    self, orderId, status, filled, remaining, avgFillPrice,
-    permId, parentId, lastFillPrice, clientId, whyHeld, mktCapPrice
-):
-        """Update custom order status and maintain live fill tracking"""
-        logging.info(f"[TWSService] Order status: ID={orderId}, status={status}, filled={filled}, avgFill={avgFillPrice}")
+    def orderStatus(self,orderId,status,filled,remaining,avgFillPrice,permId,parentId,lastFillPrice,clientId,whyHeld,mktCapPrice):
+        custom_uuid = self._ib_to_custom_id.get(orderId)
+        if not custom_uuid:
+            return
 
-        try:
-            status_str = (status or "").strip().lower()
-            custom_uuid = self._ib_to_order_id.get(orderId)
-            custom_order = self._pending_orders.get(custom_uuid)
+        status_str = status.lower()
+        pos = self._positions_by_order_id.get(custom_uuid)
 
-            if not custom_order:
-                logging.debug(f"[TWSService] Untracked IB order {orderId} (status={status})")
-                return
+        if not pos:
+            return
 
-            # --- Handle status transitions ---
-            if status_str in ("submitted", "presubmitted"):
-                # Mark active once order leaves local queue
-                custom_order.mark_active(result=f"Submitted → IBID {orderId}")
-                logging.info(f"[TWSService] Order {custom_uuid} now ACTIVE on IB")
+        # ✅ ONLY SOURCE OF TRUTH FOR QTY
+        if filled is not None:
+            pos["qty"] = int(filled)
 
+        if avgFillPrice:
+            pos["avg_price"] = float(avgFillPrice)
 
-            elif status_str == "filled":
-                # 1.  UPDATE POSITION MAP FIRST (race-free)
-                if custom_order.action.upper() == "BUY":
-                    old = self._positions_by_order_id.get(custom_order.order_id, {})
-                    new_qty = int(filled or old.get("qty", 0))
-                    pos = {
-                        "uuid": custom_order.order_id,
-                        "symbol": custom_order.symbol,
-                        "expiry": custom_order.expiry,
-                        "strike": custom_order.strike,
-                        "right": custom_order.right,
-                        "qty": new_qty,
-                        "avg_price": float(avgFillPrice or old.get("avg_price", 0.0)),
-                        "ib_id": orderId,
-                    }
-                    self._positions_by_order_id[custom_order.order_id] = pos
-                    logging.info(f"[TWSService] Saved BUY position {custom_order.symbol} "
-                                f"({custom_order.order_id}) qty={filled} @ {avgFillPrice}")
+        pos["status"] = status_str
+        self._positions_by_order_id[custom_uuid] = pos
 
-                elif custom_order.action.upper() == "SELL":
-                    target_uuid = self._ib_to_order_id.get(orderId)
-                    if target_uuid and target_uuid in self._positions_by_order_id:
-                        pos = self._positions_by_order_id[target_uuid]
-                        old_qty = pos["qty"]
-                        pos["qty"] = max(0, old_qty - int(filled or 0))
-                        logging.info(f"[TWSService] SELL fill updated {target_uuid}: "
-                                    f"qty {old_qty} → {pos['qty']}")
-                        if pos["qty"] == 0:
-                            self._positions_by_order_id.pop(target_uuid, None)
-                            logging.info(f"[TWSService] Position closed for {target_uuid}")
-
-                # 2.  CHANGE STATE LAST
-                custom_order.mark_finalized(result=f"Filled {filled} @ {avgFillPrice}")
-                if hasattr(custom_order, "_fill_event"):
-                    custom_order._fill_event.set()
-                logging.info(f"[TWSService] Order {custom_uuid} FINALIZED "
-                            f"(filled={filled} @ {avgFillPrice})")
-
-            elif status_str == "filledOLD":
-                custom_order.mark_finalized(result=f"Filled {filled} @ {avgFillPrice}")
-                logging.info(f"[TWSService] Order {custom_uuid} FINALIZED (filled={filled} @ {avgFillPrice})")
-
-                # ✅ Save live BUY position correctly for StopLoss reference
-                if custom_order.action.upper() == "BUY":
-                    # merge instead of blind overwrite
-                    old = self._positions_by_order_id.get(custom_order.order_id, {})
-                    new_qty = int(filled or old.get("qty", 0))
-                    pos = {
-                        "uuid": custom_order.order_id,
-                        "symbol": custom_order.symbol,
-                        "expiry": custom_order.expiry,
-                        "strike": custom_order.strike,
-                        "right": custom_order.right,
-                        "qty": new_qty,
-                        "avg_price": float(avgFillPrice or old.get("avg_price", 0.0)),
-                        "ib_id": orderId,
-                    }
-                    self._positions_by_order_id[custom_order.order_id] = pos
-                    logging.info(f"[TWSService] Saved BUY position … qty={new_qty}")
-                    
-                    logging.info(f"[TWSService] Saved BUY position {custom_order.symbol} ({custom_order.order_id}) qty={filled} @ {avgFillPrice}")
-                # --- 🔧 Handle SELL fills (close or reduce existing position) ---
-                if custom_order.action.upper() == "SELL":
-                    target_uuid = self._ib_to_order_id.get(orderId)
-                    if target_uuid and target_uuid in self._positions_by_order_id:
-                        pos = self._positions_by_order_id[target_uuid]
-                        old_qty = pos["qty"]
-                        pos["qty"] = max(0, old_qty - int(filled or 0))
-                        self._positions_by_order_id[target_uuid] = pos
-                        logging.info(f"[TWSService] SELL fill updated {target_uuid}: qty {old_qty} → {pos['qty']}")
-                        if pos["qty"] == 0:
-                            self._positions_by_order_id.pop(target_uuid, None)
-                            logging.info(f"[TWSService] Position closed for {target_uuid}")
-
-
-            elif status_str in ("cancelled", "apicancelled"):
-                custom_order.mark_cancelled()
-                logging.info(f"[TWSService] Order {custom_uuid} CANCELLED on IB")
-
-            elif status_str in ("inactive", "pendingcancel"):
-                custom_order.mark_failed(reason=f"Inactive or pending cancel (status={status})")
-
-            # --- Always mirror to tracking maps ---
-            if custom_uuid not in self._ib_to_order_id.values():
-                self._ib_to_order_id[orderId] = custom_uuid
-            if custom_uuid not in self._pending_orders:
-                self._pending_orders[custom_uuid] = custom_order
-
-            # --- Update position map regardless of fill ---
-            pos = self._positions_by_order_id.get(custom_uuid)
-            if pos:
-                pos["qty"] = int(filled or pos.get("qty", 0))
-                pos["avg_price"] = float(avgFillPrice or pos.get("avg_price", 0.0))
-                self._positions_by_order_id[custom_uuid] = pos
-
-        except Exception as e:
-            logging.error(f"[TWSService] orderStatus() failed for {orderId}: {e}")
+        logging.info(
+            f"[TWSService] orderStatus update {custom_uuid}: "
+            f"status={status_str} qty={pos['qty']} avg={pos.get('avg_price')}"
+        )
 
     def openOrder(self, orderId, contract, order: IBOrder, orderState):
         logging.info(f"Order opened - ID: {orderId}, Symbol: {contract.symbol}")

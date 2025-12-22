@@ -11,6 +11,7 @@ import random
 import time
 from Services.nasdaq_info import is_market_closed_or_pre_market
 from Services.order_queue_service import order_queue
+from Services.order_fixer_service import order_fixer, OrderFixerService
 
 def align_expiry_to_friday(expiry: str) -> str:
     import datetime
@@ -23,7 +24,8 @@ def align_expiry_to_friday(expiry: str) -> str:
 
 # --- Singleton: GeneralApp ---
 class GeneralApp:
-    def __init__(self, tws : TWSService = create_tws_service()):
+    def __init__(self, tws : TWSService = create_tws_service(), fixer: OrderFixerService = order_fixer):
+        self._fixer = fixer
         self._tws = tws
         self._polygon = None
         self._order_wait = None
@@ -150,7 +152,8 @@ class GeneralApp:
         self._models.add(model)
 
 
-    def add_order(self, order):
+    def add_order(self, order: Order):
+        self._fixer.fix_async(order)
         self.order_wait.add_order(order, mode="poll")
 
     def get_models(self):
