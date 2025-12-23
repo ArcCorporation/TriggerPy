@@ -776,16 +776,15 @@ class AppModel:
         return order.to_dict()
     
     def prepare_almost_option_order(
-    self,
-    action: str = "BUY",
-    position: int = 2000,
-    quantity: int = 1,
-    trigger_price: Optional[float] = None,
-    arcTick: float = 0.01,
-    type: str = "LMT",
-    status_callback=None,
-) -> Order:
-        logging.info(f"Preparing alkmost order ARC STYLE FOR {self.symbol}")
+            self,
+            action: str = "BUY",
+            position: int = 2000,
+            quantity: int = 1,
+            trigger_price: Optional[float] = None,
+            arcTick: float = 0.01,
+            type: str = "LMT",
+            status_callback=None) -> Order:
+        logging.info(f"Preparing almost order ARC STYLE FOR {self.symbol}")
         order = Order(
             symbol=self._symbol,
             expiry=self._expiry,

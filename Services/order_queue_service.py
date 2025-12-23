@@ -132,8 +132,8 @@ class OrderQueueService:
     def _execute_action(self, model, args, kwargs):
         try:
             logging.info(f"[OrderQueueService] Executing deferred place_option_order for {model.symbol}")
-            #model.place_option_order(*args, **kwargs)
-            model.prepare_almost_option_order(*args, **kwargs)
+            model.place_option_order(*args, **kwargs)
+            #model.prepare_almost_option_order(*args, **kwargs)
         except Exception as e:
             logging.error(f"[OrderQueueService] Error executing queued action for {model.symbol}: {e}")
             if hasattr(model, "_status_callback") and model._status_callback:
