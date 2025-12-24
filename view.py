@@ -9,6 +9,7 @@ from Services import nasdaq_info
 from Services.order_manager import order_manager
 from Helpers.Order import OrderState
 from Services.nasdaq_info import is_market_closed_or_pre_market
+from Services.order_wait_service import wait_service
 
 # ---------------- Banner ----------------
 class Banner(tk.Canvas):
@@ -261,8 +262,13 @@ class OrderFrame(tk.Frame):
 
         self.btn_be = ttk.Button(self.frame_actions, text="Breakeven",
                                 command=self._on_breakeven, state="disabled")
+        
         self.btn_be.pack(side="left", padx=3)
 
+        self.btn_fo = ttk.Button(self.frame_actions, text="Breakeven",
+                                command=self._on_breakeven, state="disabled")
+
+        self.btn_fo.pack(side=tk.LEFT,padx=3)
         self.tp_buttons = []
         for pct in (20, 30, 40):
             btn = ttk.Button(self.frame_actions, text=f"TP {pct}%",
@@ -726,17 +732,37 @@ class OrderFrame(tk.Frame):
             self.is_finalized = True
             self.frame_actions.grid()
             self.btn_be.config(state="normal")
+            self.btn_fo.config(state="normal")
             for btn in self.tp_buttons:
                 btn.config(state="normal")
             self._set_status("Order Finalized – controls enabled", "green")
 
-    def _on_breakeven(self):
+    def _on_flatten_out(self):
         def worker():
             try:
                 if self.model and self.model.order:
                     order = self.model.order
                     order_manager.breakeven(order.order_id)
-                    self._ui(lambda: self._set_status("Breakeven triggered", "blue"))
+                    self._ui(lambda: self._set_status("Flatten out triggered", "blue"))
+                else:
+                    self._ui(lambda: self._set_status("Error: No active order", "red"))
+            except Exception as e:
+                logging.error(f"Breakeven error: {e}")
+                self._ui(lambda: self._set_status(f"Error: {e}", "red"))
+
+        threading.Thread(target=worker, daemon=True).start()
+    def _on_breakeven(self):
+        def worker():
+            try:
+                if self.model and self.model.order:
+                    order = self.model.order
+                    if order.trigger:
+                        ot = float(order.trigger)
+                    #trigger = float(self.entry_trigger.get())
+                    if ot:
+                        wait_service.set_stop_loss(order, ot)
+                    #order_manager.breakeven(order.order_id)
+                    self._ui(lambda: self._set_status(f"Breakeven set stoploss to to trigger: {ot} ", "blue"))
                 else:
                     self._ui(lambda: self._set_status("Error: No active order", "red"))
             except Exception as e:

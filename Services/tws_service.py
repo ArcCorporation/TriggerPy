@@ -515,8 +515,20 @@ class TWSService(EWrapper, EClient):
             logging.error("TWSService.get_option_snapshot(): not connected")
             return None
 
+        ts_req = time.time() * 1000
+        logging.info(
+            "[PREMIUM_REQUEST] "
+            f"ts={ts_req:.0f} symbol={symbol} expiry={expiry} strike={strike} right={right} "
+            f"timeout={timeout}"
+        )
+
         contract = self.create_option_contract(symbol, expiry, strike, right)
         conid = self.resolve_conid(contract)
+        logging.info(
+            "[PREMIUM_CONTRACT] "
+            f"ts={time.time()*1000:.0f} symbol={symbol} conId={conid}"
+        )
+
         if not conid:
             logging.error(f"TWSService: Failed to resolve conId for {symbol} {expiry} {strike}{right}")
             return None
@@ -544,10 +556,23 @@ class TWSService(EWrapper, EClient):
 
         try:
             self.reqMktData(req_id, contract, "", True, False, [])
+            logging.info(
+            "[PREMIUM_SUBSCRIBE] "
+            f"ts={time.time()*1000:.0f} req_id={req_id} symbol={symbol} conId={conid}"
+        )
+
             event.wait(timeout)
             bid, ask = result["bid"], result["ask"]
             result["mid"] = (bid + ask) / 2 if bid and ask else bid or ask
-            logging.info(f"[TWSService] Snapshot for {symbol} {expiry} {strike}{right}: {result}")
+            logging.info(
+                "[PREMIUM] "
+                f"ts={time.time()*1000:.0f} symbol={symbol} contract={expiry} {strike}{right} "
+                f"source=SNAPSHOT bid={result['bid']} ask={result['ask']} "
+                f"mid={result['mid']} marketDataType=RTH"
+            )
+
+
+
             return result
         finally:
             try:
@@ -613,6 +638,15 @@ class TWSService(EWrapper, EClient):
 
         try:
             # Convert your custom order to IB contract
+
+            logging.info(
+                "[ORDER_INTENT] "
+                f"ts={time.time()*1000:.0f} order_id={custom_order.order_id} "
+                f"symbol={custom_order.symbol} expiry={custom_order.expiry} "
+                f"strike={custom_order.strike} right={custom_order.right} action=BUY "
+                f"pos_usd={getattr(custom_order, '_position_size', None)}"
+            )
+
             ib_right = "C" if custom_order.right.upper() in ["C", "CALL"] else "P"
             
             contract = self.create_option_contract(
@@ -658,13 +692,25 @@ class TWSService(EWrapper, EClient):
                 # fallback to manually set qty (legacy behavior)
                 qty = custom_order.qty if getattr(custom_order, "qty", None) else 1
 
+            logging.info(
+            "[SIZE_INTENT] "
+            f"ts={time.time()*1000:.0f} order_id={custom_order.order_id} "
+            f"symbol={custom_order.symbol} pos_usd={custom_order._position_size} "
+            f"premium_used={base_price} calculated_qty={qty} "
+            f"rounding=floor risk_cap=none"
+            )
+
+
             #Safety clamp
             notional = qty * base_price * 100
             if notional > custom_order._position_size *1.5:
                  logging.error(
-                    f"[RISK-GUARD] {custom_order.symbol} notional {notional:.2f} > 1.5× target {custom_order._position_size}. "
-                    f"premium_used={base_price}, qty={qty}. Blocking order."
+                    "[ORDER_BUILD] "
+                    f"ts={time.time()*1000:.0f} order_id={custom_order.order_id} "
+                    f"requested_qty={qty} final_qty=0 mutation=YES "
+                    f"mutation_reason=RISK_CAP_MAX_QTY"
                 )
+
                  return False
             custom_order.qty = qty
 
@@ -697,11 +743,24 @@ class TWSService(EWrapper, EClient):
                 "strike": custom_order.strike,
                 "right": custom_order.right,
             }
-
+            logging.info(
+                            "[ORDER_BUILD] "
+                            f"ts={time.time()*1000:.0f} order_id={custom_order.order_id} "
+                            f"requested_qty={qty} final_qty={custom_order.qty} "
+                            f"mutation={'YES' if qty != custom_order.qty else 'NO'} "
+                            f"mutation_reason={'NONE' if qty == custom_order.qty else 'UNKNOWN'}"
+                        )
             self._pending_orders[custom_order.order_id] = custom_order
+            
 
             self.placeOrder(ib_order_id, contract, ib_order)
             custom_order._placed_ts = time.time() * 1000
+            logging.info(
+            "[ORDER_SENT] "
+            f"ts={custom_order._placed_ts:.0f} order_id={custom_order.order_id} "
+            f"ib_order_id={ib_order_id} qty={custom_order.qty}"
+        )
+
 
             logging.info(f"[TWSService] Sent order {custom_order.symbol} IBID={ib_order_id} "
                         f"at {custom_order._placed_ts:.0f} ms")
