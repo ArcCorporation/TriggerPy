@@ -4,7 +4,7 @@
 
 from typing import Any, Dict
 from enum import Enum
-
+LOSS = "SET_LOSS"
 
 class AMOState(Enum):
     INIT_LOCKED = "INIT_LOCKED"

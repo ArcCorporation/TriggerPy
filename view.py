@@ -10,7 +10,7 @@ from Services.order_manager import order_manager
 from Helpers.Order import OrderState
 from Services.nasdaq_info import is_market_closed_or_pre_market
 from Services.order_wait_service import wait_service
-
+from Services.amo_service import amo, LOSS
 # ---------------- Banner ----------------
 class Banner(tk.Canvas):
     def __init__(self, parent, **kwargs):
@@ -765,7 +765,9 @@ class OrderFrame(tk.Frame):
                         ot = float(order.trigger)
                     #trigger = float(self.entry_trigger.get())
                     if ot:
-                        wait_service.set_stop_loss(order, ot)
+                        cb = amo.get(LOSS)
+                        cb(order, ot)
+                        #wait_service.set_stop_loss(order, ot) bugging try amo
                     #order_manager.breakeven(order.order_id)
                     self._ui(lambda: self._set_status(f"Breakeven set stoploss to to trigger: {ot} ", "blue"))
                 else:

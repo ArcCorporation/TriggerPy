@@ -11,7 +11,7 @@ from Services.watcher_info import (
 from Services.runtime_manager import runtime_man
 from Services.tws_service import create_tws_service, TWSService
 from Services.polygon_service import polygon_service, PolygonService
-
+from Services.amo_service import amo, LOSS
 
 class OrderWaitService:
     def __init__(self, polygon_service: PolygonService, tws_service: TWSService, poll_interval=0.1):
@@ -27,12 +27,20 @@ class OrderWaitService:
         self.cancelled_orders = set()
         # Lock for thread-safety
         self.lock = threading.Lock()
-
+        self._arclock = threading.Lock()
+        self._stoplosses = dict()
         # Storage for WS callbacks to allow proper unsubscription
         self._ws_callbacks = {} # Dictionary to store {order_id: callback_function}
 
         # Polling interval for alternate mode (seconds), e.g. 0.1s = 100ms
         self.poll_interval = poll_interval
+        amo.register(LOSS, self.set_stop_loss)
+        amo.seal()
+
+    
+    def set_stop_loss(self, order: Order, stop_loss_price: float):
+        with self._arclock:
+            self._stoplosses[order.order_id] =stop_loss_price
 
     def _poll_snapshot_thread(self, order_id: str, order: Order, tinfo: ThreadInfo):
         """
@@ -230,6 +238,7 @@ class OrderWaitService:
                          watcher_type="stop_loss",
                          mode=mode, # 💡 Pass mode to info
                          stop_loss=stop_loss_price)
+        self.set_stop_loss(order, stop_loss_price)
         watcher_info.add_watcher(tinfo)
         tinfo.update_status(STATUS_RUNNING)
 
@@ -280,6 +289,8 @@ class OrderWaitService:
 
             while runtime_man.is_run():
                 # 1. order still alive?
+                with self._arclock:
+                    sl = self._stoplosses[order.order_id]
                 if order.state not in (OrderState.ACTIVE, OrderState.PENDING):
                     logging.info(
                         f"[StopLoss-POLL] Order {order.order_id} no longer active – stopping watcher.")
@@ -304,14 +315,14 @@ class OrderWaitService:
                 last_price = snap.get("last")
                 if now - last_print >= delay:
                     logging.info(
-                        f"[StopLoss-POLL] Poll {order.symbol} → {last_price}, stop={stop_loss_price}")
+                        f"[StopLoss-POLL] Poll {order.symbol} → {last_price}, stop={sl}")
                     last_print = now
                 if last_price:
                     tinfo.update_status(STATUS_RUNNING, last_price=last_price)
 
                 # 3. trigger logic
-                triggered = (last_price >= stop_loss_price) if order.right in ("P", "PUT") \
-                        else (last_price <= stop_loss_price)
+                triggered = (last_price >= sl) if order.right in ("P", "PUT") \
+                        else (last_price <= sl)
 
                 # 4. contract resolution (throttled)
                 contract = self.tws.create_option_contract(
