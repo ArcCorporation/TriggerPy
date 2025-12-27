@@ -121,7 +121,9 @@ class SymbolSelector(ttk.Frame):
             return
         symbol = selection.split(" - ")[0]
         logging.info(f"Symbol selected: {symbol}")
-
+        if self.watcher:
+            self.watcher.stop()
+            self.watcher = None
         self.watcher = general_app.watch_price(symbol, self._update_price)
         threading.Thread(target=self._price_worker, args=(symbol,), daemon=True).start()
         self.on_symbol_selected_cb(symbol)
@@ -261,19 +263,18 @@ class OrderFrame(tk.Frame):
         #self.frame_actions.grid_remove()
 
         self.btn_be = ttk.Button(self.frame_actions, text="Breakeven",
-                                command=self._on_breakeven, state="disabled")
+                                command=self._on_breakeven )
         
         self.btn_be.pack(side="left", padx=3)
 
-        self.btn_fo = ttk.Button(self.frame_actions, text="Breakeven",
-                                command=self._on_breakeven, state="disabled")
+        self.btn_fo = ttk.Button(self.frame_actions, text="Flatten out",
+                                command=self._on_breakeven)
 
         self.btn_fo.pack(side=tk.LEFT,padx=3)
         self.tp_buttons = []
         for pct in (20, 30, 40):
             btn = ttk.Button(self.frame_actions, text=f"TP {pct}%",
-                            command=lambda p=pct: self._on_take_profit(p),
-                            state="disabled")
+                            command=lambda p=pct: self._on_take_profit(p))
             btn.pack(side="left", padx=3)
             self.tp_buttons.append(btn)
 
@@ -708,6 +709,10 @@ class OrderFrame(tk.Frame):
 
     def reset(self):
         self._symbol_token += 1
+            # 🔪 KILL WATCHER ON RESET
+        if self.symbol_selector.watcher:
+            self.symbol_selector.watcher.stop()
+            self.symbol_selector.watcher = None
         self.model = None
         self.current_symbol = None
 
