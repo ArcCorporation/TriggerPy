@@ -14,9 +14,6 @@ from Services.polygon_service import polygon_service
 from Services.nasdaq_info import is_market_closed_or_pre_market # <-- NEW IMPORT
 
 
-
-
-
 class TWSService(EWrapper, EClient):
     """
     TWS Service that integrates with Helpers.Order system
@@ -47,13 +44,15 @@ class TWSService(EWrapper, EClient):
         self._last_print = 0
         self._positions_by_order_id: dict[str, dict] = {}
         self._ib_to_order_id: dict[int, str] = {}
-    
-    
+        self._ib_to_custom_id: dict[int, str] = {}   # <-- NEW: map IB orderId -> custom UUID
+        logging.info("[TWSService] __init__ finished – empty caches, counters reset")
+
     def conn_status(self) -> bool:
         """
         Returns True if currently connected to TWS and next_valid_order_id has been set.
         This method checks both the IB API connection and the internal event flag.
         """
+        logging.info(f"[TWSService] conn_status() called – checking connection health")
         is_alive = self.isConnected() and self.connection_ready.is_set() and self.next_valid_order_id is not None
         if not is_alive:
             logging.warning("[TWSService] conn_status: Not connected to TWS")
@@ -62,6 +61,7 @@ class TWSService(EWrapper, EClient):
             if now - self._last_print >= 60:
                 logging.info("[TWSService] conn_status: Connected and healthy")
                 self._last_print = now
+        logging.info(f"[TWSService] conn_status() returning {is_alive}")
         return is_alive
 
     def disconnect(self) -> None:
@@ -69,6 +69,7 @@ class TWSService(EWrapper, EClient):
         Wrap the real disconnect() so we can log WHO/WHERE called it,
         then delegate to the genuine EClient implementation.
         """
+        logging.info("[TWSService] disconnect() entry – building caller stack")
         # Build a short human-readable caller string (last 2 frames)
         caller = "\n".join(
             f"  {s}" for s in traceback.format_stack(limit=3)[:-1][-2:]
@@ -83,12 +84,15 @@ class TWSService(EWrapper, EClient):
         # Mark our own state
         self.connected = False
         self.connection_ready.clear()
+        logging.info("[TWSService] disconnect() complete – state cleared")
+
     def reconnect(self, host: str = "127.0.0.1", port: int = 7497, timeout: int = 10) -> bool:
         """
         Attempts to reconnect to TWS/IB Gateway.
         Safely disconnects first if a stale session exists.
         Returns True if the reconnection is successful.
         """
+        logging.info(f"[TWSService] reconnect() start – target {host}:{port}")
         try:
             if self.isConnected():
                 logging.info("[TWSService] reconnect(): Closing existing connection before retry...")
@@ -112,15 +116,17 @@ class TWSService(EWrapper, EClient):
             logging.error(f"[TWSService] reconnect(): Exception during reconnection: {e}")
             return False
 
-
     def nextValidId(self, orderId: int):
+        logging.info(f"[TWSService] nextValidId callback entry – orderId={orderId}")
         super().nextValidId(orderId)
         self.next_valid_order_id = orderId
         logging.info(f"NextValidId: {orderId} (Client ID: {self.client_id})")
         self.connection_ready.set()
+        logging.info("[TWSService] connection_ready event set")
 
     # ---------------- Symbol Search ----------------
     def symbolSamples(self, reqId, contractDescriptions):
+        logging.info(f"[TWSService] symbolSamples fired – reqId={reqId}")
         results = []
         for desc in contractDescriptions:
             c = desc.contract
@@ -132,17 +138,24 @@ class TWSService(EWrapper, EClient):
                 "primaryExchange": c.primaryExchange,
                 "description": desc.derivativeSecTypes
             })
+            logging.info(f"[TWSService] symbolSamples appended – {c.symbol} {c.secType}")
         self.symbol_samples[reqId] = results
+        logging.info(f"[TWSService] symbolSamples finished – stored {len(results)} rows")
 
     def search_symbol(self, name: str, reqId: int = None):
+        logging.info(f"[TWSService] search_symbol() called – name={name}")
         if reqId is None:
             reqId = self._get_next_req_id()
+            logging.info(f"[TWSService] search_symbol() auto-selected reqId={reqId}")
         self.reqMatchingSymbols(reqId, name)
         time.sleep(2)
-        return self.symbol_samples.get(reqId, [])
+        out = self.symbol_samples.get(reqId, [])
+        logging.info(f"[TWSService] search_symbol() returning {len(out)} matches")
+        return out
 
     def error(self, reqId, errorCode, errorString, *args):
         """Error callback - handles both regular and protobuf errors"""
+        logging.info(f"[TWSService] error() fired – reqId={reqId} code={errorCode} msg={errorString}")
         actual_error_code = errorCode
         if isinstance(errorCode, int) and errorCode > 10000:
             if "errorCode:" in str(errorString):
@@ -179,16 +192,17 @@ class TWSService(EWrapper, EClient):
     self, orderId, status, filled, remaining, avgFillPrice,
     permId, parentId, lastFillPrice, clientId, whyHeld, mktCapPrice
 ):
-
-
+        logging.info(f"[TWSService] orderStatus entry – orderId={orderId} status={status} filled={filled}")
         custom_uuid = self._ib_to_custom_id.get(orderId)
         if not custom_uuid:
+            logging.info(f"[TWSService] orderStatus – no custom_uuid mapping for IB orderId={orderId}")
             return
 
         status_str = status.lower()
         pos = self._positions_by_order_id.get(custom_uuid)
 
         if not pos:
+            logging.info(f"[TWSService] orderStatus – no position cached for custom_uuid={custom_uuid}")
             return
 
         # ✅ ONLY SOURCE OF TRUTH FOR QTY
@@ -210,8 +224,10 @@ class TWSService(EWrapper, EClient):
         logging.info(f"Order opened - ID: {orderId}, Symbol: {contract.symbol}")
 
     def execDetails(self, reqId, contract, execution):
+        logging.info(f"[TWSService] execDetails – reqId={reqId} orderId={execution.orderId} side={execution.side}")
         order_id = self._ib_to_order_id.get(execution.orderId)
         if not order_id:
+            logging.info(f"[TWSService] execDetails – no mapping for IB orderId={execution.orderId}")
             return
         
         pos = self._positions_by_order_id.get(order_id)
@@ -221,6 +237,7 @@ class TWSService(EWrapper, EClient):
             if target_uuid:
                 pos = self._positions_by_order_id.get(target_uuid)
         if not pos:
+            logging.info(f"[TWSService] execDetails – no position for order_id={order_id}")
             return
 
 
@@ -245,14 +262,13 @@ class TWSService(EWrapper, EClient):
 
         logging.info(f"[TWSService] execDetails update {order_id}: side={side} qty={new_qty}, avg={new_avg}")
 
-
-
     def securityDefinitionOptionParameter(
     self, reqId: int, exchange: str,
     underlyingConId: int, tradingClass: str,
     multiplier: str, expirations: List[str],
     strikes: List[float]
 ):
+        logging.info(f"[TWSService] securityDefinitionOptionParameter – reqId={reqId} exchange={exchange}")
         try:
             if reqId not in self._maturities_data or self._maturities_data[reqId] is None:
                 self._maturities_data[reqId] = {
@@ -263,6 +279,7 @@ class TWSService(EWrapper, EClient):
                     "expirations": set(),
                     "strikes": set(),
                 }
+                logging.info(f"[TWSService] securityDefinitionOptionParameter – initialized fresh dict for reqId={reqId}")
             data = self._maturities_data[reqId]
             before_e, before_s = len(data["expirations"]), len(data["strikes"])
             data["expirations"].update(expirations or [])
@@ -277,6 +294,7 @@ class TWSService(EWrapper, EClient):
 
     def securityDefinitionOptionParameterEnd(self, reqId: int):
         """Finalize merged option chain"""
+        logging.info(f"[TWSService] securityDefinitionOptionParameterEnd – reqId={reqId}")
         if reqId in self._maturities_data:
             data = self._maturities_data[reqId]
             expirations = sorted(data["expirations"])
@@ -287,14 +305,16 @@ class TWSService(EWrapper, EClient):
                 f"[TWSService] Option chain complete: {len(expirations)} expirations, {len(strikes)} strikes"
             )
         self._maturities_event.set()
-
-
+        logging.info(f"[TWSService] securityDefinitionOptionParameterEnd – event set for reqId={reqId}")
 
     def contractDetails(self, reqId: int, contractDetails):
+        logging.info(f"[TWSService] contractDetails – reqId={reqId}")
         self._contract_details[reqId] = contractDetails
         self._contract_details_event.set()
+        logging.info(f"[TWSService] contractDetails – event set for reqId={reqId}")
 
     def contractDetailsEnd(self, reqId: int):
+        logging.info(f"[TWSService] contractDetailsEnd – reqId={reqId}")
         self._contract_details_event.set()
 
     def connectionClosed(self):
@@ -303,6 +323,7 @@ class TWSService(EWrapper, EClient):
 
     def _reader_wrapper(self):
         """Catch everything that kills the reader loop."""
+        logging.info("[TWSService] _reader_wrapper – starting IB run loop")
         try:
             self.run()                 # real IB loop
         except Exception as exc:
@@ -316,7 +337,9 @@ class TWSService(EWrapper, EClient):
 
     def connect_and_start(self, host='127.0.0.1', port=7497, timeout=10):
         """Connect to TWS/IB Gateway"""
+        logging.info(f"[TWSService] connect_and_start – {host}:{port} timeout={timeout}")
         if self.connected:
+            logging.info("[TWSService] connect_and_start – already connected, skipping")
             return True
         try:
             logging.info(f"Connecting to TWS on {host}:{port} with Client ID: {self.client_id}")
@@ -329,6 +352,7 @@ class TWSService(EWrapper, EClient):
             )
             
             api_thread.start()
+            logging.info("[TWSService] connect_and_start – IB reader thread launched")
             
             if self.connection_ready.wait(timeout=timeout):
                 logging.info("Successfully connected to TWS")
@@ -342,16 +366,20 @@ class TWSService(EWrapper, EClient):
             return False
 
     def is_connected(self):
-        return self.connection_ready.is_set() and self.next_valid_order_id is not None
+        flag = self.connection_ready.is_set() and self.next_valid_order_id is not None
+        logging.info(f"[TWSService] is_connected() returning {flag}")
+        return flag
 
     def _get_next_req_id(self):
         req_id = self._request_counter
         self._request_counter += 1
+        logging.info(f"[TWSService] _get_next_req_id() -> {req_id}")
         return req_id
 
     def get_maturities(self, symbol: str, exchange: str = "SMART", currency: str = "USD", 
                       timeout: int = 10) -> Optional[Dict]:
         """Get option expirations and strikes for a symbol"""
+        logging.info(f"[TWSService] get_maturities() – symbol={symbol} exchange={exchange}")
         if not self.is_connected():
             logging.error("Not connected to TWS")
             return None
@@ -397,9 +425,11 @@ class TWSService(EWrapper, EClient):
         finally:
             if req_id in self._maturities_data:
                 del self._maturities_data[req_id]
+                logging.info(f"[TWSService] get_maturities() – cleaned up reqId={req_id}")
 
     def resolve_conid(self, contract: Contract, timeout: int = 10) -> Optional[int]:
         """Resolve contract to conId"""
+        logging.info(f"[TWSService] resolve_conid() – contract={contract.symbol}")
         if not self.is_connected():
             return None
 
@@ -458,11 +488,13 @@ class TWSService(EWrapper, EClient):
             self.contractDetails = orig_cd
             self.contractDetailsEnd = orig_cde
             del self._contract_details[req_id]
+            logging.info(f"[ResolveConId] Cleanup done for reqId={req_id}")
 
 
     def create_option_contract(self, symbol: str, last_trade_date: str, strike: float, right: str, 
                              exchange: str = "SMART", currency: str = "USD") -> Contract:
         """Create IB option contract - converts CALL/PUT to C/P"""
+        logging.info(f"[TWSService] create_option_contract – {symbol} {last_trade_date} {strike}{right}")
         ib_right = "C" if right.upper() in ["C", "CALL"] else "P"
         
         contract = Contract()
@@ -478,6 +510,7 @@ class TWSService(EWrapper, EClient):
         return contract
 
     def create_stock_contract(self, symbol: str, exchange: str = "SMART", currency: str = "USD") -> Contract:
+        logging.info(f"[TWSService] create_stock_contract – {symbol} {exchange}")
         contract = Contract()
         contract.symbol = symbol.upper()
         contract.secType = "STK"
@@ -491,6 +524,7 @@ class TWSService(EWrapper, EClient):
         Build a basic option chain for a given symbol and expiry.
         Returns a list of dicts with strike/right.
         """
+        logging.info(f"[TWSService] get_option_chain – {symbol} {expiry}")
         try:
             maturities = self.get_maturities(symbol, exchange, currency, timeout)
             if not maturities:
@@ -505,12 +539,14 @@ class TWSService(EWrapper, EClient):
             for strike in strikes:
                 chain.append({"expiry": expiry, "strike": strike, "right": "C"})
                 chain.append({"expiry": expiry, "strike": strike, "right": "P"})
+            logging.info(f"[TWSService] get_option_chain – built {len(chain)} legs")
             return chain
         except Exception as e:
             logging.error(f"TWSService: Failed to build option chain for {symbol}: {e}")
             return []
 
     def get_option_snapshot(self, symbol: str, expiry: str, strike: float, right: str, timeout: int = 3):
+        logging.info(f"[TWSService] get_option_snapshot – {symbol} {expiry} {strike}{right}")
         if not self.is_connected():
             logging.error("TWSService.get_option_snapshot(): not connected")
             return None
@@ -570,9 +606,6 @@ class TWSService(EWrapper, EClient):
                 f"source=SNAPSHOT bid={result['bid']} ask={result['ask']} "
                 f"mid={result['mid']} marketDataType=RTH"
             )
-
-
-
             return result
         finally:
             try:
@@ -632,6 +665,7 @@ class TWSService(EWrapper, EClient):
         """
         Place an order using your custom Order object from Helpers.Order.
         """
+        logging.info(f"[TWSService] place_custom_order – order_id={custom_order.order_id}")
         if not self.is_connected():
             logging.error(f"Cannot place order: Not connected to TWS")
             return False
@@ -734,6 +768,8 @@ class TWSService(EWrapper, EClient):
             ib_order_id = self.next_valid_order_id
             custom_order._ib_order_id = ib_order_id
             self._ib_to_order_id[ib_order_id] = custom_order.order_id
+            # NEW: also map IB id -> custom UUID for orderStatus
+            self._ib_to_custom_id[ib_order_id] = custom_order.order_id
 
             self._positions_by_order_id[custom_order.order_id] = {
                 "qty": 0,
@@ -777,6 +813,7 @@ class TWSService(EWrapper, EClient):
 
     def cancel_custom_order(self, custom_order_id: str) -> bool:
         """Cancel a custom order"""
+        logging.info(f"[TWSService] cancel_custom_order – {custom_order_id}")
         if custom_order_id in self._pending_orders:
             order = self._pending_orders[custom_order_id]
             if hasattr(order, '_ib_order_id'):
@@ -784,12 +821,14 @@ class TWSService(EWrapper, EClient):
                 order.mark_cancelled()
                 logging.info(f"Cancelled order {custom_order_id}")
                 return True
+        logging.info(f"[TWSService] cancel_custom_order – no action taken for {custom_order_id}")
         return False
 
     def get_order_status(self, custom_order_id: str) -> Optional[Dict]:
         """
         Get the status of a custom order.
         """
+        logging.info(f"[TWSService] get_order_status – {custom_order_id}")
         if custom_order_id in self._pending_orders:
             order = self._pending_orders[custom_order_id]
             return order.to_dict()
@@ -805,6 +844,7 @@ class TWSService(EWrapper, EClient):
         - Uses the correct closing quantity if a position ID is provided (from the StopLoss Watcher).
         - Otherwise, dynamically recalculates quantity from live premium if position_size is set.
         """
+        logging.info(f"[TWSService] sell_custom_order – {custom_order.order_id}")
         if not self.is_connected():
             logging.error("Cannot place SELL order: Not connected to TWS")
             return False
@@ -875,9 +915,11 @@ class TWSService(EWrapper, EClient):
 
 
     def get_position_by_order_id(self, order_id: str):
+        logging.info(f"[TWSService] get_position_by_order_id – {order_id}")
         return self._positions_by_order_id.get(order_id)
 
     def has_position(self, order_id_or_symbol: str) -> bool:
+        logging.info(f"[TWSService] has_position – query={order_id_or_symbol}")
         # check by UUID first
         pos = self._positions_by_order_id.get(order_id_or_symbol)
         if pos and pos["qty"] > 0:
@@ -893,6 +935,7 @@ class TWSService(EWrapper, EClient):
 
     def sell_position_by_order_id(self, order_id: str, contract : Contract, qty: int | None = None,
                               limit_price: float | None = None, account: str = "", ex_order: Optional[Order] = None) -> bool:
+        logging.info(f"[TWSService] sell_position_by_order_id – order_id={order_id} qty={qty}")
         pos = self._positions_by_order_id.get(order_id)
         if not pos or pos["qty"] <= 0:
             logging.warning(f"[TWSService] sell_position_by_order_id: no live position for {order_id}")
@@ -930,6 +973,7 @@ class TWSService(EWrapper, EClient):
         Live premium for a *single* option contract.
         Prioritizes Polygon data if the market is closed/pre-market.
         """
+        logging.info(f"[TWSService] get_option_premium – {symbol} {expiry} {strike}{right}")
         # --- 💡 MODIFIED PRE-MARKET BLOCK 💡 ---
         # If market is closed/pre-market, ONLY use Polygon.
         # Do not fall through to TWS logic if Polygon fails.
@@ -1016,11 +1060,11 @@ class TWSService(EWrapper, EClient):
             self.tickPrice = original_tick
 
 service = TWSService()
+logging.info("[TWSService] module-level service instance created")
 
 
 def create_tws_service() -> TWSService:
-    
-    
+    logging.info("[TWSService] create_tws_service() called – returning singleton")
     return service
 
 
