@@ -3,8 +3,7 @@ from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
 from ibapi.order import Order as IBOrder
-import threading
-import time
+
 import logging
 import random
 from typing import List, Dict, Optional
@@ -12,7 +11,8 @@ from Helpers.Order import Order
 import traceback
 from Services.polygon_service import polygon_service
 from Services.nasdaq_info import is_market_closed_or_pre_market # <-- NEW IMPORT
-
+import time, threading
+ORDER_LOCK = threading.Lock()   # <-- only one order can pass at a time
 
 class TWSService(EWrapper, EClient):
     """
@@ -658,10 +658,21 @@ class TWSService(EWrapper, EClient):
 
         except Exception as e:
             logging.error(f"[TWSService] pre_conid ERROR {e}")
+
+
             return False
+        
 
+    
+    def place_custom_order(self, custom_order, account="") -> bool:
+        with ORDER_LOCK:                     # wait your turn
+            while self.next_valid_order_id is None:
+                time.sleep(0.1)              # don’t move until TWS gives us an ID
+            return self._real_place_custom_order(custom_order, account)   # old logic
+            
 
-    def place_custom_order(self, custom_order: Order, account: str = "") -> bool:
+    def _real_place_custom_order(self, custom_order, account="") -> bool:
+    # paste your old place_custom_order code here (nothing deleted)
         """
         Place an order using your custom Order object from Helpers.Order.
         """
