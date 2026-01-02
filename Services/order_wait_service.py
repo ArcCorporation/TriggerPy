@@ -605,7 +605,7 @@ class OrderWaitService:
                         _update_tinfo_status(STATUS_FAILED, info={"error": "Fill event timed out"}) 
 
                 # ✅ if stop-loss configured, launch stop-loss watcher
-                    if order.trigger and order.sl_price and order.state == OrderState.FINALIZED:
+                    if order.trigger or (order.sl_price and order.state == OrderState.FINALIZED):
                         stop_loss_level = order.trigger - order.sl_price if order.right == 'C' or order.right == "CALL" else order.trigger + order.sl_price
                         exit_order = Order(
                             symbol=order.symbol,
@@ -626,7 +626,7 @@ class OrderWaitService:
                         logging.info(f"[WAITSERVICE] Spawned EXIT watcher {ex_order.order_id} "
                                 f"stop={stop_loss_level} ({order.right})")
                         
-                        # 💡 MODIFIED: Spawn watcher in "ws" mode
+                 
                         self.start_stop_loss_watcher(ex_order, stop_loss_level, mode="poll")
 
 
