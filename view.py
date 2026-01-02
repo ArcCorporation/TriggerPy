@@ -743,6 +743,7 @@ class OrderFrame(tk.Frame):
             self._set_status("Order Finalized – controls enabled", "green")
 
     def _on_flatten_out(self):
+        logging.info(f"[Flatten_out] starting")
         def worker():
             try:
                 if self.model and self.model.order:
@@ -752,11 +753,12 @@ class OrderFrame(tk.Frame):
                 else:
                     self._ui(lambda: self._set_status("Error: No active order", "red"))
             except Exception as e:
-                logging.error(f"Breakeven error: {e}")
-                self._ui(lambda: self._set_status(f"Error: {e}", "red"))
+                logging.error(f"FLATTEN_OUT error: {e}")
+                self._ui(lambda: self._set_status(f"FLATTEN_OUT Error: {e}", "red"))
 
         threading.Thread(target=worker, daemon=True).start()
     def _on_breakeven(self):
+        logging.info(f"[Breakeven] starting")
         def worker():
             try:
                 if self.model and self.model.order:
@@ -771,14 +773,15 @@ class OrderFrame(tk.Frame):
                     #order_manager.breakeven(order.order_id)
                     self._ui(lambda: self._set_status(f"Breakeven set stoploss to to trigger: {ot} ", "blue"))
                 else:
-                    self._ui(lambda: self._set_status("Error: No active order", "red"))
+                    self._ui(lambda: self._set_status("Breakeven Error: No active order", "red"))
             except Exception as e:
                 logging.error(f"Breakeven error: {e}")
-                self._ui(lambda: self._set_status(f"Error: {e}", "red"))
+                self._ui(lambda: self._set_status(f"Breakeven Error: {e}", "red"))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_take_profit(self, pct):
+        logging.info(f"[Take Profit] starting")
         def worker():
             try:
                 if self.model and self.model.order:
