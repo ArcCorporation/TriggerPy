@@ -14,6 +14,7 @@ import os, sys
 import threading
 from datetime import datetime, timedelta
 from Services.runtime_manager import runtime_man
+from work_symbols_view import WorkSymbolsView
 
 AUTO_SAVE_INTERVAL_MIN = 5
 
@@ -74,6 +75,12 @@ class ArcTriggerApp(tk.Tk):
         tk.Button(top_frame, text="Show Debug", command=self.toggle_debug).pack(side="left", padx=10)
         ttk.Button(top_frame, text="Watchers", command=self.show_watchers).pack(side="left", padx=5)
         ttk.Button(top_frame, text="Positions", command=self.show_positions).pack(side="left", padx=5)
+        ttk.Button(
+    top_frame,
+    text="Work Symbols",
+    command=lambda: WorkSymbolsView(self)
+).pack(side="left", padx=5)
+
 
         # Removed: ttk.Button(top_frame, text="Finalized Orders", ...)
 

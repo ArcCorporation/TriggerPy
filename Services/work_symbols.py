@@ -1,8 +1,10 @@
 # work_symbols.py
 
 from typing import Dict
-from persistent_conid_storage import storage, PersistentConidStorage
-
+from Services.persistent_conid_storage import storage, PersistentConidStorage
+from Services.tws_service import create_tws_service
+from ibapi.contract import Contract
+import logging
 
 class WorkSymbols:
     """
@@ -14,6 +16,54 @@ class WorkSymbols:
     def __init__(self, storage: PersistentConidStorage = storage):
         self.storage = storage
         self.symbols: Dict[str, bool] = {}
+
+
+    def refresh_all_conids(self) -> None:
+        """
+        Force-refresh UNDERLYING conids for all tracked option symbols.
+        These conids are used as the base for OPT trading.
+        """
+        
+
+        tws = create_tws_service()
+
+        if not tws.is_connected():
+            logging.error("[WorkSymbols] TWS not connected – cannot refresh underlying conids")
+            return
+
+        for symbol in list(self.symbols.keys()):
+            try:
+                logging.info(f"[WorkSymbols] Resolving underlying conid for {symbol}")
+
+                # ⚠️ IMPORTANT:
+                # This STK contract is ONLY used to resolve the UNDERLYING conId
+                # Required by IB for option chains and OPT contracts
+                underlying_contract = Contract()
+                underlying_contract.symbol = symbol
+                underlying_contract.secType = "STK"      # resolver-only
+                underlying_contract.exchange = "SMART"
+                underlying_contract.currency = "USD"
+
+                conid = tws.resolve_conid(underlying_contract)
+
+                if conid:
+                    self.storage.store_conid(symbol, str(conid))
+                    self.symbols[symbol] = True
+                    logging.info(
+                        f"[WorkSymbols] ✅ Underlying conid stored for {symbol}: {conid}"
+                    )
+                else:
+                    self.symbols[symbol] = False
+                    logging.warning(
+                        f"[WorkSymbols] ❌ Failed to resolve underlying conid for {symbol}"
+                    )
+
+            except Exception as e:
+                self.symbols[symbol] = False
+                logging.exception(
+                    f"[WorkSymbols] Exception while resolving underlying conid for {symbol}: {e}"
+                )
+
 
     def add_symbol(self, symbol: str) -> None:
         """

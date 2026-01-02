@@ -11,6 +11,7 @@ from Helpers.Order import Order
 import traceback
 from Services.polygon_service import polygon_service
 from Services.nasdaq_info import is_market_closed_or_pre_market # <-- NEW IMPORT
+from Services.persistent_conid_storage import storage
 import time, threading
 ORDER_LOCK = threading.Lock()   # <-- only one order can pass at a time
 
@@ -430,6 +431,11 @@ class TWSService(EWrapper, EClient):
     def resolve_conid(self, contract: Contract, timeout: int = 10) -> Optional[int]:
         """Resolve contract to conId"""
         logging.info(f"[TWSService] resolve_conid() – contract={contract.symbol}")
+        
+        conid = storage.get_conid(contract.symbol) 
+        if conid != None:
+            logging.info(f"[TWSService] using stored conid at resolve_conid({contract.symbol})")
+            return int(conid)
         if not self.is_connected():
             return None
 
