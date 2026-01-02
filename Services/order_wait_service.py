@@ -271,6 +271,7 @@ class OrderWaitService:
                 name=f"StopLoss-{order.symbol}-{order_id[:4]}-poll"
             )
             t.start()
+            logging.info(f"[StopLoss] Started sl watcher for {order.symbol} (order {order_id})")
             return t
 
     def _run_stop_loss_watcher_poll_thread(self, order: Order, stop_loss_price: float, tinfo: ThreadInfo):
