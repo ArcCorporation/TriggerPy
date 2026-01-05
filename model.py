@@ -629,6 +629,27 @@ class AppModel:
 
         return order
 
+    def _resolve_mid_premium(self, current_price: float, arcTick: float) -> float:
+        premium = general_app.get_option_premium(
+            self._symbol, self._expiry, self._strike, self._right
+        )
+
+        if premium is None or premium <= 0:
+            logging.warning("place_option_order: No live premium → using fallback from underlying.")
+            premium = max(round((current_price or 1) * 0.01, 2), 0.1)
+
+        mid = premium + arcTick
+
+        if mid < 3:
+            tick = 0.01
+        elif mid >= 5:
+            tick = 0.15
+        else:
+            tick = 0.05
+
+        mid = round(int(round(mid / tick)) * tick, 2)
+        return mid
+
 
     def place_option_order(
         self,
@@ -643,7 +664,7 @@ class AppModel:
 
         self._expiry = align_expiry_to_friday(self._expiry)
 
-        # --- 1. sanity checks ---
+        # --- sanity ---
         if not all([self._symbol, self._expiry, self._strike, self._right]):
             raise ValueError("Option parameters not set")
 
@@ -653,29 +674,16 @@ class AppModel:
 
         if not self._validate_breakout_trigger(trigger_price, current_price):
             raise ValueError(f"Trigger {trigger_price} invalid for current price {current_price}")
-        
 
-        premium = general_app.get_option_premium(
-            self._symbol, self._expiry, self._strike, self._right
-        )
+        # --- premium resolved ONCE ---
+        mid_premium = self._resolve_mid_premium(current_price, arcTick)
 
-        if premium is None or premium <= 0:
-            logging.warning("place_option_order: No live premium → using fallback from underlying.")
-            premium = max(round((current_price or 1) * 0.01, 2), 0.1)
+        # --- SL / TP defaults ---
+        if self._stop_loss is None:
+            self._stop_loss = round(mid_premium * 0.8, 2)
+        if self._take_profit is None:
+            self._take_profit = round(mid_premium * 1.2, 2)
 
-        mid_premium = premium + arcTick
-
-        # --- 4. tick rounding ---
-        if mid_premium < 3:
-            tick = 0.01
-        elif mid_premium >= 5:
-            tick = 0.15
-        else:
-            tick = 0.05
-
-        mid_premium = int(round(mid_premium / tick)) * tick
-        mid_premium = round(mid_premium, 2)
-        
         order = Order(
             symbol=self._symbol,
             expiry=self._expiry,
@@ -689,46 +697,9 @@ class AppModel:
             action=action.upper(),
             trigger=trigger_price,
         )
+
         order.set_position_size(float(position))
         order._order_ready = True
-        # --- 2. queue during premarket ---
-        if is_market_closed_or_pre_market():
-            status = f"AppModel[{self._symbol}]: Premarket → queuing place_option_order() for RTH."
-            logging.info(status)
-            if status_callback:
-                status_callback(status, "orange")
-            order_queue.queue_action(self, action, position, quantity, trigger_price, status_callback, arcTick, type)
-            general_app.pre_conid(order)
-            return {}
-
-        # --- 3. premium discovery ---
-        premium = general_app.get_option_premium(
-            self._symbol, self._expiry, self._strike, self._right
-        )
-
-        if premium is None or premium <= 0:
-            logging.warning("place_option_order: No live premium → using fallback from underlying.")
-            premium = max(round((current_price or 1) * 0.01, 2), 0.1)
-
-        mid_premium = premium + arcTick
-
-        # --- 4. tick rounding ---
-        if mid_premium < 3:
-            tick = 0.01
-        elif mid_premium >= 5:
-            tick = 0.15
-        else:
-            tick = 0.05
-
-        mid_premium = int(round(mid_premium / tick)) * tick
-        mid_premium = round(mid_premium, 2)
-
-        # --- 5. SL / TP default logic ---
-        if self._stop_loss is None:
-            self._stop_loss = round(mid_premium * 0.8, 2)
-        if self._take_profit is None:
-            self._take_profit = round(mid_premium * 1.2, 2)
-
 
         cb = status_callback or self._status_callback
         if cb:
@@ -737,44 +708,54 @@ class AppModel:
             except Exception as e:
                 logging.error(f"Failed to attach status callback: {e}")
 
-        # --- 7. immediate execution OR waiting breakout ---
+        # --- PREMARKET QUEUE ---
+        if is_market_closed_or_pre_market():
+            status = f"AppModel[{self._symbol}]: Premarket → queued for RTH."
+            logging.info(status)
+            if cb:
+                cb(status, "orange")
+
+            order_queue.queue_action(
+                self, action, position, quantity, trigger_price, status_callback, arcTick, type
+            )
+            general_app.pre_conid(order)
+            return {}
+
+        # --- EXECUTION ---
         if not trigger_price or order.is_triggered(current_price):
-
-            # 🔥 INFINITE AGGRESSIVE RETRY FOR ORDER TRANSMISSION
             attempt = 0
-            success = False
-
-            while not success:
+            while True:
                 attempt += 1
                 try:
-                    success = general_app.place_custom_order(order)
+                    if general_app.place_custom_order(order):
+                        logging.info(
+                            f"AppModel[{self._symbol}] Order transmitted after {attempt} attempts"
+                        )
+                        if cb:
+                            cb(f"Order executed successfully (attempt {attempt})", "green")
+                        break
                 except Exception as e:
                     logging.error(f"AppModel[{self._symbol}] ERROR attempt {attempt}: {e}")
-                    success = False
 
-                if success:
-                    logging.info(f"AppModel[{self._symbol}] Order transmitted successfully after {attempt} attempts")
-                    if cb:
-                        cb(f"Order executed successfully (attempt {attempt})", "green")
-                    break
-
-                # FAILED → retry forever
-                logging.warning(f"AppModel[{self._symbol}] Order transmit failed → RETRY {attempt}")
+                logging.warning(f"AppModel[{self._symbol}] Retry placing order ({attempt})")
                 if cb:
                     cb(f"Retrying to place order… ({attempt})", "orange")
                 time.sleep(1)
 
-            # after final success:
-            order.mark_active(result=f"IB Order ID: {getattr(order, '_ib_order_id', 'Unknown')}")
+            order.mark_active(
+                result=f"IB Order ID: {getattr(order, '_ib_order_id', 'Unknown')}"
+            )
             logging.info(f"AppModel[{self._symbol}] ACTIVE {order.order_id}")
 
         else:
             general_app.add_order(order)
-            logging.info(f"AppModel[{self._symbol}]: Order waiting breakout {order.order_id}")
+            logging.info(
+                f"AppModel[{self._symbol}] Waiting breakout {order.order_id}"
+            )
 
         self._order = order
         return order.to_dict()
-    
+
     def prepare_almost_option_order(
             self,
             action: str = "BUY",
