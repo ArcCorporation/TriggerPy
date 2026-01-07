@@ -413,7 +413,7 @@ class AppModel:
 
         # 3. Rebase queued action
         success = order_queue.rebase_queued_premarket_order(
-            self,
+            self.order,
             new_trigger=new_trigger
         )
 
