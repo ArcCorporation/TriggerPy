@@ -10,7 +10,7 @@ from Helpers.Order import Order, OrderState
 import random
 import time
 from Services.nasdaq_info import is_market_closed_or_pre_market
-from Services.order_queue_service import order_queue
+from Services.order_queue_service import order_queue , OrderQueueService
 from Services.order_fixer_service import order_fixer, OrderFixerService
 
 def align_expiry_to_friday(expiry: str) -> str:
@@ -290,7 +290,7 @@ general_app = GeneralApp()
 
 # --- Per-symbol model ---
 class AppModel:
-    def __init__(self, symbol: str):
+    def __init__(self, symbol: str, que : OrderQueueService = order_queue):
         self._id = str(uuid.uuid4())
         self._symbol = symbol.upper()
         self._underlying_price: Optional[float] = None
@@ -301,9 +301,10 @@ class AppModel:
         self._take_profit: Optional[float] = None
         self._order: Optional[Order] = None
         self._status_callback: Optional[callable] = None  # added
+        self.order_queue = order_queue
 
     def cancel_queued(self):
-        order_queue.cancel_queued_actions_for_model(self)
+        self.order_queue.cancel_queued_actions_for_model(self)
 
     # ------------------------------------------------------------------
     def set_status_callback(self, fn):
@@ -715,10 +716,7 @@ class AppModel:
             if cb:
                 cb(status, "orange")
 
-            order_queue.queue_action(
-                self, action, position, quantity, trigger_price, status_callback, arcTick, type
-            )
-            general_app.pre_conid(order)
+            self.order_queue.queue_order(order)
             return {}
 
         # --- EXECUTION ---
