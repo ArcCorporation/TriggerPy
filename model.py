@@ -716,6 +716,7 @@ class AppModel:
             if cb:
                 cb(status, "orange")
 
+            self.order_queue.set_app(general_app)
             self.order_queue.queue_order(order)
             return {}
 

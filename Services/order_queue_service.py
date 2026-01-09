@@ -4,7 +4,7 @@ import logging
 from Services.nasdaq_info import is_market_closed_or_pre_market, rth_proximity_factor
 from Services.tws_service import create_tws_service, TWSService
 from Services.polygon_service import polygon_service, PolygonService
-from model import general_app
+#from model import general_app
 from Helpers.Order import Order
 
 
@@ -27,6 +27,13 @@ class OrderQueueService:
 
         self._running = True
         self._thread_started = False
+        self.general_app = None
+
+
+
+    def set_app(self, general_app):
+        self.general_app = general_app
+    
 
         logging.info("[OrderQueueService] Initialized (ORDER-based queue).")
 
@@ -170,7 +177,7 @@ class OrderQueueService:
                 f"{order.order_id} ({order.symbol})"
             )
 
-            general_app.add_order(order)
+            self.general_app.add_order(order)
 
         except Exception as e:
             logging.error(
