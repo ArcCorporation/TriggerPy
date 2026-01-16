@@ -120,6 +120,9 @@ class OrderQueueService:
     # ------------------------------------------------------------------
     def _monitor_market_open(self):
         logging.info("[OrderQueueService] Monitoring for market open...")
+        
+        last_log_time = 0
+        log_interval = 60  # Log status every 60 seconds instead of every iteration
 
         while self._running:
             try:
@@ -132,13 +135,21 @@ class OrderQueueService:
                     self._on_market_open()
                     return
 
+                # Check queue count (minimize lock time)
                 with self._lock:
                     count = len(self._queued_orders)
 
-                if count > 0:
+                # Reduced frequency logging
+                now = time.time()
+                if count > 0 and (now - last_log_time) >= log_interval:
                     logging.info(
-                        f"[OrderQueueService] Market closed/pre-market. "
-                        f"{count} order(s) queued."
+                        f"[OrderQueueService] Pre-market: {count} order(s) queued, "
+                        f"checking again in {delay:.1f}s"
+                    )
+                    last_log_time = now
+                elif count > 0:
+                    logging.debug(
+                        f"[OrderQueueService] Pre-market: {count} order(s) queued"
                     )
 
                 time.sleep(delay)

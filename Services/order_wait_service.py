@@ -1,7 +1,6 @@
 import threading
 import time
 import logging
-import time
 from Helpers.Order import Order, OrderState
 from Services.order_manager import order_manager
 from Services.watcher_info import (
@@ -14,7 +13,7 @@ from Services.polygon_service import polygon_service, PolygonService
 from Services.amo_service import amo, LOSS
 
 class OrderWaitService:
-    def __init__(self, polygon_service: PolygonService, tws_service: TWSService, poll_interval=0.1):
+    def __init__(self, polygon_service: PolygonService, tws_service: TWSService, poll_interval=0.5):
         self.polygon = polygon_service
         self.tws = tws_service
         self.trigger_lock = threading.Lock()
@@ -32,7 +31,7 @@ class OrderWaitService:
         # Storage for WS callbacks to allow proper unsubscription
         self._ws_callbacks = {} # Dictionary to store {order_id: callback_function}
 
-        # Polling interval for alternate mode (seconds), e.g. 0.1s = 100ms
+        # Polling interval for alternate mode (seconds), optimized from 0.1s to 0.5s
         self.poll_interval = poll_interval
         amo.register(LOSS, self.set_stop_loss)
         amo.seal()
@@ -47,17 +46,18 @@ class OrderWaitService:
         Inner polling thread logic for trigger watcher (formerly _poll_snapshot).
         Monitors a stock snapshot until the trigger condition is met or the order is cancelled.
         """
-        delay = 2
+        delay = 5  # Increased from 2 to 5 seconds for status logging
         last = 0
 
         logging.info(f"[WaitService] Snapshot thread started | order_id={order_id} | symbol={order.symbol}")
 
         try:
             while runtime_man.is_run() and order.state == OrderState.PENDING:
-                logging.info(f"[WaitService] Loop tick | order_id={order_id} | state={order.state}")
-                logging.info(f"[WaitService] checking if order is ready or not?")
+                logging.debug(f"[WaitService] Loop tick | order_id={order_id} | state={order.state}")
+                
+                # Order preparation check - should ideally be done before watcher starts
                 if not order._order_ready:
-                    logging.info(f"[WaitService] Lorder not ready lets fix that....")
+                    logging.warning(f"[WaitService] Order not ready, preparing | order_id={order_id}")
                     model = order._model
                     _args = order._args
                     _order = model.prepare_option_order(action= _args["action"]
@@ -68,8 +68,9 @@ class OrderWaitService:
                                                         ,type="LMT"
                                                         ,status_callback=_args["status_callback"])
                     order = _order
-                    logging.info(f"[WitService] BEWARE ORDER COMPLETLY PREPARED IN WATCHER: {order}")
+                    logging.info(f"[WaitService] Order prepared in watcher | order_id={order_id}")
 
+                # Consolidated lock check
                 with self.lock:
                     if order_id not in self.pending_orders:
                         logging.info(f"[WaitService] Order missing from pending_orders | order_id={order_id}")
@@ -77,63 +78,53 @@ class OrderWaitService:
                         return
 
                     if order_id in self.cancelled_orders:
-                        logging.info(f"[WaitService] Order found in cancelled_orders | order_id={order_id}")
+                        logging.info(f"[WaitService] Order cancelled | order_id={order_id}")
                         watcher_info.remove(order_id)
                         return
 
-                logging.info(f"[WaitService] Fetching snapshot | symbol={order.symbol}")
+                logging.debug(f"[WaitService] Fetching snapshot | symbol={order.symbol}")
                 snap = self.polygon.get_snapshot(order.symbol)
 
                 if not snap:
-                    logging.info(f"[WaitService] Empty snapshot received | symbol={order.symbol}")
+                    logging.debug(f"[WaitService] Empty snapshot | symbol={order.symbol}")
                     time.sleep(self.poll_interval)
                     continue
 
                 last_price = snap.get("last")
                 now = time.time()
 
-                logging.info(
-                    f"[WaitService] Snapshot received | symbol={order.symbol} | last_price={last_price}"
+                logging.debug(
+                    f"[WaitService] Snapshot | symbol={order.symbol} | price={last_price}"
                 )
 
+                # Periodic status logging (reduced frequency)
                 if now - last > delay:
                     logging.info(
-                        f"[WaitService] Poll interval log | symbol={order.symbol} | price={last_price}"
+                        f"[WaitService] Monitoring {order.symbol} | price={last_price} | trigger={order.trigger}"
                     )
                     last = now
 
                 if last_price:
-                    logging.info(
-                        f"[WaitService] Updating thread status | order_id={order_id} | price={last_price}"
-                    )
                     tinfo.update_status(STATUS_RUNNING, last_price=last_price)
 
                 if last_price and order.is_triggered(last_price):
                     logging.info(
-                        f"[WaitService] Trigger condition met | order_id={order_id} | trigger_price={last_price}"
+                        f"[WaitService] 🎯 TRIGGER MET | order_id={order_id} | price={last_price} | trigger={order.trigger}"
                     )
 
                     self._finalize_order(order_id, order, tinfo, last_price)
 
                     with self.lock:
                         if order_id in self.pending_orders:
-                            logging.info(
-                                f"[WaitService] Removing order from pending_orders | order_id={order_id}"
-                            )
                             del self.pending_orders[order_id]
 
-                    logging.info(
-                        f"[WaitService] Snapshot thread exiting after trigger | order_id={order_id}"
-                    )
+                    logging.info(f"[WaitService] Watcher completed | order_id={order_id}")
                     return
 
-                logging.info(
-                    f"[WaitService] Sleeping for poll interval | seconds={self.poll_interval}"
-                )
                 time.sleep(self.poll_interval)
 
         except Exception as e:
-            logging.info(
+            logging.error(
                 f"[WaitService] Exception in snapshot thread | order_id={order_id} | error={str(e)}"
             )
             tinfo.update_status(STATUS_FAILED, info={"error": str(e)})
@@ -281,17 +272,25 @@ class OrderWaitService:
         """
         # --- This is the body of the old inner _stop_loss_thread ---
         last_print   = 0
-        delay        = 5
+        delay        = 10  # Increased from 5 to 10 seconds for status logging
         warn_times   = {"contract": 0, "premium": 0, "position": 0}
+        
+        # Cache for contract ID to avoid repeated resolution
+        cached_conid = None
 
         logging.info(
             f"[StopLoss-POLL] Watching {order.symbol} stop-loss @ {stop_loss_price}  ({order.right})")
         try:
 
             while runtime_man.is_run():
-                # 1. order still alive?
+                # 1. Check order state and cancellation (consolidated lock)
                 with self._arclock:
-                    sl = self._stoplosses[order.order_id]
+                    sl = self._stoplosses.get(order.order_id)
+                    if sl is None:
+                        logging.warning(f"[StopLoss-POLL] Stop-loss removed externally | order_id={order.order_id}")
+                        tinfo.update_status(STATUS_CANCELLED)
+                        return
+                
                 if order.state not in (OrderState.ACTIVE, OrderState.PENDING):
                     logging.info(
                         f"[StopLoss-POLL] Order {order.order_id} no longer active – stopping watcher.")
@@ -305,72 +304,83 @@ class OrderWaitService:
                         tinfo.update_status(STATUS_CANCELLED)
                         return
 
-                # 2. market data
+                # 2. Fetch market data
                 snap = self.polygon.get_snapshot(order.symbol)
                 if not snap:
+                    logging.debug(f"[StopLoss-POLL] No snapshot for {order.symbol}")
                     time.sleep(self.poll_interval)
-                    logging.warning(f"[StopLoss-POLL] BEWARE NO SNAP FOR {order.symbol}")
                     continue
 
                 now = time.time()
                 last_price = snap.get("last")
-                if now - last_print >= delay:
+                
+                # Periodic status logging (reduced frequency)
+                if last_price and now - last_print >= delay:
                     logging.info(
-                        f"[StopLoss-POLL] Poll {order.symbol} → {last_price}, stop={sl}")
+                        f"[StopLoss-POLL] Monitoring {order.symbol} → {last_price}, stop={sl}")
                     last_print = now
+                
                 if last_price:
                     tinfo.update_status(STATUS_RUNNING, last_price=last_price)
 
-                # 3. trigger logic
+                # 3. Check trigger logic
                 triggered = (last_price >= sl) if order.right in ("P", "PUT") \
                         else (last_price <= sl)
 
-                # 4. contract resolution (throttled)
-                contract = self.tws.create_option_contract(
-                    order.symbol, order.expiry, order.strike, order.right)
-                conid = self.tws.resolve_conid(contract)
-                if not conid:
-                    if now - warn_times["contract"] >= 30:
-                        logging.warning(
-                            f"[StopLoss-POLL] still no conId for {order.symbol} "
-                            f"{order.expiry} {order.strike}{order.right} – will keep trying")
-                        warn_times["contract"] = now
-                    time.sleep(self.poll_interval)
-                    continue
-                contract.conId = conid
-                warn_times["contract"] = 0
+                # 4. Contract resolution (with caching and improved throttling)
+                if cached_conid is None:
+                    contract = self.tws.create_option_contract(
+                        order.symbol, order.expiry, order.strike, order.right)
+                    conid = self.tws.resolve_conid(contract)
+                    
+                    if not conid:
+                        if now - warn_times["contract"] >= 30:
+                            logging.warning(
+                                f"[StopLoss-POLL] No conId for {order.symbol} "
+                                f"{order.expiry} {order.strike}{order.right} – retrying")
+                            warn_times["contract"] = now
+                        time.sleep(self.poll_interval)
+                        continue
+                    
+                    cached_conid = conid
+                    contract.conId = conid
+                    logging.debug(f"[StopLoss-POLL] Cached conId {conid} for {order.symbol}")
+                else:
+                    contract = self.tws.create_option_contract(
+                        order.symbol, order.expiry, order.strike, order.right)
+                    contract.conId = cached_conid
 
-                # 5. premium fetch (throttled)
+                # 5. Premium fetch (with improved throttling)
                 premium = self.tws.get_option_premium(
                     order.symbol, order.expiry, order.strike, order.right)
+                
                 if premium is None or premium <= 0:
                     pos_fallback = self.tws.get_position_by_order_id(order.previous_id)
                     premium = pos_fallback and pos_fallback.get("avg_price") or None
+                    
                     if premium is None:
                         if now - warn_times["premium"] >= 30:
                             logging.warning(
-                                f"[StopLoss-POLL] no premium for {order.symbol} "
-                                f"{order.expiry} {order.strike}{order.right} – will keep trying")
+                                f"[StopLoss-POLL] No premium for {order.symbol} "
+                                f"{order.expiry} {order.strike}{order.right} – retrying")
                             warn_times["premium"] = now
                         time.sleep(self.poll_interval)
                         continue
-                warn_times["premium"] = 0
 
-                # 6. position check (throttled)
+                # 6. Position check (with improved throttling)
                 pos = self.tws.get_position_by_order_id(order.previous_id)
                 if not pos or pos.get("qty", 0) <= 0:
                     if now - warn_times["position"] >= 30:
                         logging.warning(
-                            f"[StopLoss-POLL] no live position for {order.previous_id} – will keep watching")
+                            f"[StopLoss-POLL] No live position for {order.previous_id} – will keep watching")
                         warn_times["position"] = now
                     time.sleep(self.poll_interval)
                     continue
-                warn_times["position"] = 0
 
-                # 7. exit when triggered
+                # 7. Exit when triggered
                 if triggered:
                     logging.info(
-                        f"[StopLoss-POLL] TRIGGERED! {order.symbol} "
+                        f"[StopLoss-POLL] 🚨 TRIGGERED! {order.symbol} "
                         f"Price {last_price} vs Stop {stop_loss_price}"
                     )
                     live_qty = int(pos["qty"])
