@@ -13,7 +13,7 @@ from Services.polygon_service import polygon_service, PolygonService
 from Services.amo_service import amo, LOSS
 
 class OrderWaitService:
-    def __init__(self, polygon_service: PolygonService, tws_service: TWSService, poll_interval=0.5):
+    def __init__(self, polygon_service: PolygonService, tws_service: TWSService, poll_interval=0.1):
         self.polygon = polygon_service
         self.tws = tws_service
         self.trigger_lock = threading.Lock()
