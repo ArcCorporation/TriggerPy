@@ -453,12 +453,18 @@ class TWSService(EWrapper, EClient):
 
     def resolve_conid(self, contract: Contract, timeout: int = 10) -> Optional[int]:
         """Resolve contract to conId"""
-        logging.info(f"[TWSService] resolve_conid() – contract={contract.symbol}")
+        logging.info(f"[TWSService] resolve_conid() – contract={contract.symbol} secType={getattr(contract, 'secType', '?')}")
         
-        conid = storage.get_conid(contract.symbol) 
-        if conid != None:
-            logging.info(f"[TWSService] using stored conid at resolve_conid({contract.symbol})")
-            return int(conid)
+        # ✅ FIX: Only use cached conId for STOCK contracts
+        # OPTION contracts have different conIds - must resolve fresh
+        # The cache (work_symbols) only stores underlying STOCK conIds
+        if contract.secType == "STK":
+            conid = storage.get_conid(contract.symbol) 
+            if conid != None:
+                logging.info(f"[TWSService] using stored STOCK conid at resolve_conid({contract.symbol})")
+                return int(conid)
+        
+        # For OPTION contracts or if no cache, resolve fresh
         if not self.is_connected():
             return None
 
