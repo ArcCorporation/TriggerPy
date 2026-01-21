@@ -469,16 +469,26 @@ class AppModel:
             EASTERN = pytz.timezone("US/Eastern")
             now_et = datetime.now(EASTERN).time()
             if dtime(4, 0) <= now_et < dtime(9, 30):
-             
+                # ✅ Allow expiry alignment in premarket
                 aligned = align_expiry_to_friday(expiry)
                 if aligned in maturities['expirations']:
                     logging.warning(f"[{self._symbol}] Premarket expiry {expiry} auto-aligned → {aligned}")
                     self._expiry = aligned
-                    return True
+                    # ✅ BUT STILL VALIDATE STRIKE EXISTS - no bypass for invalid strikes!
+                    if strike in maturities['strikes']:
+                        return True
+                    else:
+                        logging.error(f"[{self._symbol}] Premarket: Strike {strike} not in chain (even after expiry alignment)")
+                        return False
                 else:
-                    # still allow — chain not yet refreshed
-                    logging.warning(f"[{self._symbol}] Premarket validation bypass for {expiry} (TWS chain not refreshed)")
-                    return True
+                    # ✅ Only bypass if chain data is truly unavailable (empty strikes list)
+                    if not maturities.get('strikes') or len(maturities.get('strikes', [])) == 0:
+                        logging.warning(f"[{self._symbol}] Premarket: Chain not yet loaded (no strikes available) - allowing for now")
+                        return True
+                    else:
+                        # Chain is loaded but strike/expiry not found - reject it
+                        logging.error(f"[{self._symbol}] Premarket: Expiry {expiry} and/or strike {strike} not in chain (chain is loaded)")
+                        return False
 
             logging.error(f"[{self._symbol}] Contract invalid → expiry {expiry} or strike {strike} not in chain")
             return False

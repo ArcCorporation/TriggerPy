@@ -317,40 +317,104 @@ class OrderFrame(tk.Frame):
 
     def _on_type_changed(self, *args):
         """Repopulate strikes when CALL/PUT toggled AND update model right."""
-        try:
-            # 🎯 FIX: Update model right immediately
-            self._update_model_right()
-            
-            if not self.model:
-                return
-            price = self.model.refresh_market_price()
-            if price:
-                self._populate_strike_combo(price)
-        except Exception as e:
-            logging.error(f"Type change repopulate error: {e}")
+        # ✅ Update model right immediately (no network call)
+        self._update_model_right()
+        
+        if not self.model:
+            return
+        
+        # ✅ Run price fetch and strike population in worker thread (non-blocking)
+        def worker():
+            try:
+                price = self.model.refresh_market_price()
+                if price:
+                    self._populate_strike_combo(price)
+            except Exception as e:
+                logging.error(f"Type change repopulate error: {e}")
+        
+        threading.Thread(target=worker, daemon=True).start()
 
 
     def _populate_strike_combo(self, centre: float):
-        step = 2.5 if self.var_use_25.get() else 1.0
-        count = 5
-        strikes = []
-
-        if self.var_type.get() == "CALL":
-            first = self._next_tick(centre, step, up=True)
-            strikes = [first + i * step for i in range(count)]
-        else:  # PUT
-            last = self._next_tick(centre, step, up=False)
-            strikes = [last - i * step for i in range(count)]
-            strikes.reverse()   # keep descending order in combo
-
-        # plain integers when step==1, else 1-decimal for 2.5
-        fmt = "{:.0f}" if step == 1.0 else "{:.1f}"
-        self.combo_strike["values"] = [fmt.format(v) for v in strikes]
-
-        # default to closest to centre
-        best = min(strikes, key=lambda v: abs(v - centre))
-        self.combo_strike.set(fmt.format(best))
-        self.combo_strike.config(state="readonly")
+        """
+        Populate strike combo with actual strikes from option chain.
+        For CALLs: 5 strikes above trigger price
+        For PUTs: 5 strikes below trigger price
+        ✅ ASYNC: Runs in worker thread to avoid blocking UI
+        """
+        if not self.model:
+            return
+        
+        # Get maturity/expiry
+        maturity = self.combo_maturity.get()
+        if not maturity:
+            # No maturity selected yet - can't get strikes
+            self._ui(lambda: self.combo_strike.config(state="disabled"))
+            self._ui(lambda: setattr(self.combo_strike, "values", []))
+            return
+        
+        # ✅ Run in worker thread to avoid blocking UI
+        def worker():
+            try:
+                # ✅ Get actual strikes from option chain (blocking call)
+                available_strikes = self.model.get_available_strikes(maturity)
+                
+                def apply():
+                    if not available_strikes:
+                        # Chain not loaded yet
+                        self.combo_strike["values"] = []
+                        self.combo_strike.config(state="disabled")
+                        return
+                    
+                    # ✅ Check radio button selection (CALL or PUT)
+                    is_call = self.var_type.get() == "CALL"
+                    
+                    if is_call:
+                        # ✅ CALL: 5 strikes above trigger price
+                        strikes = sorted([s for s in available_strikes if s >= centre])
+                        strikes = strikes[:5]  # Take first 5 above trigger
+                        if not strikes:
+                            # If no strikes above, get closest ones
+                            strikes = sorted(available_strikes, key=lambda s: abs(s - centre))[:5]
+                    else:  # PUT
+                        # ✅ PUT: 5 strikes below trigger price
+                        strikes = sorted([s for s in available_strikes if s <= centre], reverse=True)
+                        strikes = strikes[:5]  # Take first 5 below trigger (descending)
+                        if not strikes:
+                            # If no strikes below, get closest ones
+                            strikes = sorted(available_strikes, key=lambda s: abs(s - centre))[:5]
+                            strikes.reverse()
+                    
+                    if not strikes:
+                        self.combo_strike["values"] = []
+                        self.combo_strike.config(state="disabled")
+                        return
+                    
+                    # Format strikes (handle both whole numbers and decimals)
+                    fmt_strikes = []
+                    for s in strikes:
+                        if s == int(s):
+                            fmt_strikes.append(f"{int(s)}")
+                        else:
+                            fmt_strikes.append(f"{s:.1f}")
+                    
+                    self.combo_strike["values"] = fmt_strikes
+                    
+                    # Default to closest to trigger price
+                    best = min(strikes, key=lambda v: abs(v - centre))
+                    if best == int(best):
+                        self.combo_strike.set(f"{int(best)}")
+                    else:
+                        self.combo_strike.set(f"{best:.1f}")
+                    
+                    self.combo_strike.config(state="readonly")
+                
+                self._ui(apply)
+            except Exception as e:
+                logging.error(f"Error populating strikes: {e}")
+                self._ui(lambda: self.combo_strike.config(state="disabled"))
+        
+        threading.Thread(target=worker, daemon=True).start()
 
 # helper: snap to next valid tick (up or down)
     def _next_tick(self, price: float, step: float, up: bool) -> float:
@@ -392,17 +456,36 @@ class OrderFrame(tk.Frame):
         self.recalc_quantity()
 
     def recalc_quantity(self):
-        """Recalculate Qty from current position size + last price."""
+        """Recalculate Qty from current position size + last price.
+        ✅ ASYNC: Runs in worker thread to avoid blocking UI.
+        """
         if not self.model:
             return
-        try:
-            price = self.model.refresh_market_price()
-            pos_size = float(self.entry_pos_size.get() or 2000)
-            qty = self.model.calculate_quantity(pos_size, price)
-            self.entry_qty.delete(0, tk.END)
-            self.entry_qty.insert(0, str(qty))
-        except Exception as e:
-            logging.error(f"Quantity recalc error: {e}")
+        
+        # ✅ Run in worker thread to avoid blocking UI
+        def worker():
+            try:
+                # Get position size (read from UI in worker thread is safe)
+                pos_size = float(self.entry_pos_size.get() or 2000)
+                
+                # ✅ Fetch price in background (blocking network call)
+                price = self.model.refresh_market_price()
+                
+                # ✅ Update UI via thread-safe callback
+                def apply():
+                    if price and price > 0:
+                        qty = self.model.calculate_quantity(pos_size, price)
+                        self.entry_qty.delete(0, tk.END)
+                        self.entry_qty.insert(0, str(qty))
+                    else:
+                        # Price fetch failed - keep existing qty or show error
+                        logging.warning("Could not fetch price for quantity calculation")
+                
+                self._ui(apply)
+            except Exception as e:
+                logging.error(f"Quantity recalc error: {e}")
+        
+        threading.Thread(target=worker, daemon=True).start()
 
     def _ui(self, fn, *args, **kwargs):
         """Thread-safe UI update."""
@@ -645,6 +728,12 @@ class OrderFrame(tk.Frame):
                         return
 
                 # Continue normally if OK
+                # ✅ Validate maturity is not empty
+                if not maturity or not maturity.strip():
+                    self._ui(lambda: self._set_status("Error: Please select a maturity/expiry", "red"))
+                    self.btn_save.config(state="normal")
+                    return
+                
                 self.model.set_option_contract(maturity, strike, right)
                 if sl is not None:
                     self.model._stop_loss = sl
@@ -769,15 +858,38 @@ class OrderFrame(tk.Frame):
             try:
                 if self.model and self.model.order:
                     order = self.model.order
-                    if order.trigger:
-                        ot = float(order.trigger)
-                    #trigger = float(self.entry_trigger.get())
-                    if ot:
-                        cb = amo.get(LOSS)
-                        cb(order, ot)
-                        #wait_service.set_stop_loss(order, ot) bugging try amo
-                    #order_manager.breakeven(order.order_id)
-                    self._ui(lambda: self._set_status(f"Breakeven set stoploss to to trigger: {ot} ", "blue"))
+                    order_id = order.order_id
+                    
+                    # ✅ Get order from finalized_orders (like TP does)
+                    from Services.order_manager import order_manager
+                    base_order = order_manager.finalized_orders.get(order_id)
+                    if not base_order:
+                        self._ui(lambda: self._set_status("Breakeven Error: Order not finalized yet", "red"))
+                        return
+                    
+                    # ✅ Get trigger price (stock price level that triggered entry)
+                    if not base_order.trigger:
+                        self._ui(lambda: self._set_status("Breakeven Error: No trigger price found", "red"))
+                        return
+                    
+                    trigger_price = float(base_order.trigger)
+                    
+                    # ✅ Find the exit order (stop loss watcher) for this original order
+                    from model import general_app
+                    wait_service = general_app.get_order_wait_service()
+                    exit_order = wait_service.find_exit_order_by_original_id(order_id)
+                    
+                    if not exit_order:
+                        self._ui(lambda: self._set_status("Breakeven Error: Stop loss watcher not found", "red"))
+                        logging.warning(f"[Breakeven] No exit order found for original order {order_id}")
+                        return
+                    
+                    # ✅ Update stop loss to trigger price (breakeven)
+                    cb = amo.get(LOSS)
+                    cb(exit_order, trigger_price)
+                    
+                    logging.info(f"[Breakeven] Updated stop loss to trigger price {trigger_price} for order {order_id}")
+                    self._ui(lambda: self._set_status(f"Breakeven: Stop loss moved to trigger price {trigger_price:.2f}", "blue"))
                 else:
                     self._ui(lambda: self._set_status("Breakeven Error: No active order", "red"))
             except Exception as e:
