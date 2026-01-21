@@ -902,13 +902,24 @@ class OrderFrame(tk.Frame):
         logging.info(f"[Take Profit] starting")
         def worker():
             try:
-                if self.model and self.model.order:
-                    order = self.model.order
-                    order_manager.take_profit(order.order_id, pct / 100)
+                if not self.model:
+                    self._ui(lambda: self._set_status("Error: No model", "red"))
+                    return
+                
+                # ✅ FIX: Find the most recent finalized BUY order for this symbol
+                from Services.order_manager import order_manager
+                finalized = None
+                for order_id, order in order_manager.finalized_orders.items():
+                    if order.symbol == self.model.symbol and order.action == "BUY":
+                        finalized = order
+                        break
+                
+                if finalized:
+                    order_manager.take_profit(finalized.order_id, pct / 100)
                     self._ui(lambda: self._set_status(f"Take Profit {pct}% triggered", "blue"))
                 else:
-                    logging.error("Take-Profit error: No active order")
-                    self._ui(lambda: self._set_status("Error: No active order", "red"))
+                    logging.error(f"Take-Profit error: No finalized BUY order found for {self.model.symbol}")
+                    self._ui(lambda: self._set_status("Error: No active position", "red"))
             except Exception as e:
                 logging.error(f"Take-Profit error: {e}")
                 self._ui(lambda: self._set_status(f"Error: {e}", "red"))
