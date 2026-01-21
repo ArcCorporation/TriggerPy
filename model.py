@@ -807,9 +807,10 @@ class AppModel:
 
     def cancel_pending_order(self, order_id: str) -> bool:
         order = self._order
-        if order.order_id == order_id and order.state == OrderState.PENDING:
+        if order and order.order_id == order_id:  # Check if order exists
             general_app.cancel_order(order_id)
             order.mark_cancelled()
+            self._order = None  # Clear the reference so you can place new order
             logging.info(f"AppModel[{self._symbol}]: Order cancelled {order_id}")
             return True
         return False

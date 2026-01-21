@@ -700,11 +700,17 @@ class OrderFrame(tk.Frame):
                     self.model.cancel_queued()
                 pending = self.model.order
                 
-                self.model.cancel_pending_order(pending.order_id)
-                self._ui(lambda: self._set_status("Pending orders cancelled", "orange"))
-                self.btn_save.config(state="normal")
+                if pending:  # Check if order exists
+                    self.model.cancel_pending_order(pending.order_id)
+                    self._ui(lambda: self._set_status("Pending orders cancelled", "orange"))
+                else:
+                    self._ui(lambda: self._set_status("No order to cancel", "gray"))
             except Exception as e:
                 logging.error(f"Cancel error: {e}")
+                self._ui(lambda: self._set_status(f"Cancel error: {e}", "red"))
+            finally:
+                # Always re-enable button after cancel (success or failure)
+                self._ui(lambda: self.btn_save.config(state="normal"))
         threading.Thread(target=worker, daemon=True).start()
 
     def reset(self):
