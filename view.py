@@ -856,42 +856,46 @@ class OrderFrame(tk.Frame):
         logging.info(f"[Breakeven] starting")
         def worker():
             try:
-                if self.model and self.model.order:
-                    order = self.model.order
-                    order_id = order.order_id
-                    
-                    # ✅ Get order from finalized_orders (like TP does)
-                    from Services.order_manager import order_manager
-                    base_order = order_manager.finalized_orders.get(order_id)
-                    if not base_order:
-                        self._ui(lambda: self._set_status("Breakeven Error: Order not finalized yet", "red"))
-                        return
-                    
-                    # ✅ Get trigger price (stock price level that triggered entry)
-                    if not base_order.trigger:
-                        self._ui(lambda: self._set_status("Breakeven Error: No trigger price found", "red"))
-                        return
-                    
-                    trigger_price = float(base_order.trigger)
-                    
-                    # ✅ Find the exit order (stop loss watcher) for this original order
-                    from model import general_app
-                    wait_service = general_app.get_order_wait_service()
-                    exit_order = wait_service.find_exit_order_by_original_id(order_id)
-                    
-                    if not exit_order:
-                        self._ui(lambda: self._set_status("Breakeven Error: Stop loss watcher not found", "red"))
-                        logging.warning(f"[Breakeven] No exit order found for original order {order_id}")
-                        return
-                    
-                    # ✅ Update stop loss to trigger price (breakeven)
-                    cb = amo.get(LOSS)
-                    cb(exit_order, trigger_price)
-                    
-                    logging.info(f"[Breakeven] Updated stop loss to trigger price {trigger_price} for order {order_id}")
-                    self._ui(lambda: self._set_status(f"Breakeven: Stop loss moved to trigger price {trigger_price:.2f}", "blue"))
-                else:
-                    self._ui(lambda: self._set_status("Breakeven Error: No active order", "red"))
+                if not self.model:
+                    self._ui(lambda: self._set_status("Error: No model", "red"))
+                    return
+                
+                # ✅ FIX: Find the most recent finalized BUY order for this symbol
+                from Services.order_manager import order_manager
+                finalized = None
+                for order_id, order in order_manager.finalized_orders.items():
+                    if order.symbol == self.model.symbol and order.action == "BUY":
+                        finalized = order
+                        break
+                
+                if not finalized:
+                    self._ui(lambda: self._set_status("Breakeven Error: No active position", "red"))
+                    logging.warning(f"[Breakeven] No finalized BUY order found for {self.model.symbol}")
+                    return
+                
+                # ✅ Get trigger price (stock price level that triggered entry)
+                if not finalized.trigger:
+                    self._ui(lambda: self._set_status("Breakeven Error: No trigger price found", "red"))
+                    return
+                
+                trigger_price = float(finalized.trigger)
+                
+                # ✅ Find the exit order (stop loss watcher) for this original order
+                from model import general_app
+                wait_service = general_app.get_order_wait_service()
+                exit_order = wait_service.find_exit_order_by_original_id(finalized.order_id)
+                
+                if not exit_order:
+                    self._ui(lambda: self._set_status("Breakeven Error: Stop loss watcher not found", "red"))
+                    logging.warning(f"[Breakeven] No exit order found for original order {finalized.order_id}")
+                    return
+                
+                # ✅ Update stop loss to trigger price (breakeven)
+                cb = amo.get(LOSS)
+                cb(exit_order, trigger_price)
+                
+                logging.info(f"[Breakeven] Updated stop loss to trigger price {trigger_price} for order {finalized.order_id}")
+                self._ui(lambda: self._set_status(f"Breakeven: Stop loss moved to trigger price {trigger_price:.2f}", "blue"))
             except Exception as e:
                 logging.error(f"Breakeven error: {e}")
                 self._ui(lambda: self._set_status(f"Breakeven Error: {e}", "red"))
