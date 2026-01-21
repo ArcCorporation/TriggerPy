@@ -11,6 +11,7 @@ from Services.runtime_manager import runtime_man
 from Services.tws_service import create_tws_service, TWSService
 from Services.polygon_service import polygon_service, PolygonService
 from Services.amo_service import amo, LOSS
+from Services.nasdaq_info import is_market_closed_or_pre_market
 
 class OrderWaitService:
     def __init__(self, polygon_service: PolygonService, tws_service: TWSService, poll_interval=0.1):
@@ -112,14 +113,28 @@ class OrderWaitService:
                         f"[WaitService] 🎯 TRIGGER MET | order_id={order_id} | price={last_price} | trigger={order.trigger}"
                     )
 
-                    self._finalize_order(order_id, order, tinfo, last_price)
+                    # Check if premarket - if so, prompt rebase/cancel instead of firing
+                    if is_market_closed_or_pre_market():
+                        logging.info(
+                            f"[WaitService] Premarket trigger hit - prompting rebase/cancel | order_id={order_id}"
+                        )
+                        self._handle_premarket_trigger(order_id, order, tinfo, last_price)
+                        # Continue watching (don't return)
+                        # Remove from trigger_status so it can trigger again after rebase
+                        with self.trigger_lock:
+                            if order in self.trigger_status:
+                                self.trigger_status.remove(order)
+                        continue
+                    else:
+                        # RTH - fire the order
+                        self._finalize_order(order_id, order, tinfo, last_price)
 
-                    with self.lock:
-                        if order_id in self.pending_orders:
-                            del self.pending_orders[order_id]
+                        with self.lock:
+                            if order_id in self.pending_orders:
+                                del self.pending_orders[order_id]
 
-                    logging.info(f"[WaitService] Watcher completed | order_id={order_id}")
-                    return
+                        logging.info(f"[WaitService] Watcher completed | order_id={order_id}")
+                        return
 
                 time.sleep(self.poll_interval)
 
@@ -489,21 +504,31 @@ class OrderWaitService:
                 self.trigger_status.add(order)
                 logging.info(f"[WaitService-WS] TRIGGERED! {order.symbol} @ {price}, trigger={order.trigger}")
                 
-                # --- Finalize ---
-                # Note: tinfo is None, _finalize_order will find it
-                self._finalize_order(order_id, order, tinfo=None, last_price=price)
-                
-                # --- Unsubscribe and cleanup ---
-                callback_func = self._ws_callbacks.pop(order_id, None)
-                if callback_func:
-                    try:
-                        self.polygon.unsubscribe(order.symbol, callback_func)
-                    except Exception as e:
-                        logging.debug(f"[WaitService-WS] Unsubscribe ignored for {order.symbol}: {e}")
+                # Check if premarket - if so, prompt rebase/cancel instead of firing
+                if is_market_closed_or_pre_market():
+                    logging.info(
+                        f"[WaitService-WS] Premarket trigger hit - prompting rebase/cancel | order_id={order_id}"
+                    )
+                    self._handle_premarket_trigger(order_id, order, tinfo, price)
+                    # Continue watching (don't remove from pending_orders)
+                    # Remove from trigger_status so it can trigger again after rebase
+                    self.trigger_status.remove(order)
+                    return
+                else:
+                    # RTH - fire the order
+                    self._finalize_order(order_id, order, tinfo=None, last_price=price)
+                    
+                    # --- Unsubscribe and cleanup ---
+                    callback_func = self._ws_callbacks.pop(order_id, None)
+                    if callback_func:
+                        try:
+                            self.polygon.unsubscribe(order.symbol, callback_func)
+                        except Exception as e:
+                            logging.debug(f"[WaitService-WS] Unsubscribe ignored for {order.symbol}: {e}")
 
-                with self.lock:
-                    self.pending_orders.pop(order_id, None) # Remove from pending
-                    self.cancelled_orders.add(order_id) # Add to prevent race conditions
+                    with self.lock:
+                        self.pending_orders.pop(order_id, None) # Remove from pending
+                        self.cancelled_orders.add(order_id) # Add to prevent race conditions
 
     def _on_stop_loss_tick(self, order_id: str, price: float, stop_loss_level: float):
         """💡 NEW: Callback from PolygonService for live STOP-LOSS triggers."""
@@ -573,8 +598,137 @@ class OrderWaitService:
                 logging.error(f"[WaitService] WS unsubscribe failed for {order_id}: {e}")
 
   
+    def _handle_premarket_trigger(self, order_id: str, order: Order, tinfo: ThreadInfo, last_price: float):
+        """
+        Handle trigger hit during premarket.
+        Prompts user to rebase or cancel, then continues watching.
+        """
+        cb = getattr(order, "_status_callback", None)
+        
+        # Get the model to access rebase functionality
+        model = getattr(order, "_model", None)
+        if not model:
+            # Try to find model from general_app
+            from model import general_app
+            models = general_app.get_models()
+            for m in models:
+                if m.symbol == order.symbol and m.order and m.order.order_id == order_id:
+                    model = m
+                    break
+        
+        if model:
+            # Get latest premarket extreme and calculate new trigger/strike
+            if not is_market_closed_or_pre_market():
+                # Shouldn't happen, but just in case
+                logging.warning(f"[WaitService] _handle_premarket_trigger called outside premarket")
+                return
+            
+            from model import general_app
+            market_data = general_app.get_market_data_for_trigger(order.symbol, 'premarket')
+            if market_data:
+                new_trigger = (
+                    market_data["high"] if order.right in ("C", "CALL")
+                    else market_data["low"]
+                )
+                
+                if new_trigger and new_trigger > 0:
+                    # Compute ATM strike from trigger
+                    step = 2.5
+                    if order.right in ("C", "CALL"):
+                        new_strike = int(new_trigger / step) * step + step
+                    else:
+                        new_strike = int(new_trigger / step) * step
+                    new_strike = round(new_strike, 2)
+                    
+                    # Update model
+                    model._strike = new_strike
+                    
+                    # Update order
+                    old_trigger = order.trigger
+                    order.trigger = new_trigger
+                    order.strike = new_strike
+                    
+                    logging.info(
+                        f"[WaitService] Auto-rebased premarket trigger | order_id={order_id} | "
+                        f"old_trigger={old_trigger} | new_trigger={new_trigger} | new_strike={new_strike}"
+                    )
+                    if cb:
+                        cb(
+                            f"Premarket trigger hit @ {last_price:.2f} - Auto-rebased to {new_trigger:.2f}",
+                            "blue"
+                        )
+                else:
+                    # Rebase failed - no valid market data
+                    logging.warning(
+                        f"[WaitService] Premarket trigger hit but invalid market data | order_id={order_id}"
+                    )
+                    if cb:
+                        cb(
+                            f"⚠️ Premarket trigger hit @ {last_price:.2f} - Rebase failed. Order watching continues.",
+                            "orange"
+                        )
+            else:
+                # Rebase failed - no market data
+                logging.warning(
+                    f"[WaitService] Premarket trigger hit but no market data | order_id={order_id}"
+                )
+                if cb:
+                    cb(
+                        f"⚠️ Premarket trigger hit @ {last_price:.2f} - Rebase failed. Order watching continues.",
+                        "orange"
+                    )
+        else:
+            logging.warning(
+                f"[WaitService] Premarket trigger hit but no model found | order_id={order_id}"
+            )
+            if cb:
+                cb(
+                    f"⚠️ Premarket trigger hit @ {last_price:.2f} - Order watching continues.",
+                    "orange"
+                )
+        
+        # Update watcher status
+        if tinfo:
+            tinfo.update_status(STATUS_RUNNING, last_price=last_price)
+
     def _finalize_order(self, order_id: str, order: Order, tinfo: ThreadInfo, last_price):
         """Sends the entry order to TWS and handles cleanup and status updates."""
+        
+        # Ensure we're in RTH (shouldn't be called in premarket, but double-check)
+        if is_market_closed_or_pre_market():
+            logging.error(
+                f"[WaitService] _finalize_order called in premarket - this should not happen! | order_id={order_id}"
+            )
+            return
+        
+        # If order not ready, prepare it now (fetch price, calculate quantity)
+        if not getattr(order, "_order_ready", False):
+            logging.info(f"[WaitService] Order not ready - preparing now | order_id={order_id}")
+            model = getattr(order, "_model", None)
+            if model and hasattr(order, "_args"):
+                try:
+                    _args = order._args
+                    prepared_order = model.prepare_option_order(
+                        action=_args.get("action", "BUY"),
+                        position=_args.get("position", 2000),
+                        quantity=_args.get("quantity", 1),
+                        trigger_price=_args.get("trigger_price"),
+                        arcTick=_args.get("arcTick", 0.01),
+                        type=_args.get("type", "LMT"),
+                        status_callback=_args.get("status_callback")
+                    )
+                    # Update order with prepared values
+                    order.entry_price = prepared_order.entry_price
+                    order.qty = prepared_order.qty
+                    order._order_ready = True
+                    logging.info(
+                        f"[WaitService] Order prepared | order_id={order_id} | "
+                        f"price={order.entry_price} | qty={order.qty}"
+                    )
+                except Exception as e:
+                    logging.error(f"[WaitService] Failed to prepare order: {e}")
+                    order.mark_failed(f"Preparation failed: {e}")
+                    return
         
         # Helper to update tinfo if it exists (for poll mode)
         def _update_tinfo_status(status, **kwargs):

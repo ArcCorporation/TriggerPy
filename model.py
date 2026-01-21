@@ -709,19 +709,17 @@ class AppModel:
             except Exception as e:
                 logging.error(f"Failed to attach status callback: {e}")
 
-        # --- PREMARKET QUEUE ---
-        if is_market_closed_or_pre_market():
-            status = f"AppModel[{self._symbol}]: Premarket → queued for RTH."
+        # --- ALWAYS START WATCHING (even in premarket) ---
+        # Don't queue in premarket - start watching immediately
+        is_premarket = is_market_closed_or_pre_market()
+        if is_premarket:
+            status = f"AppModel[{self._symbol}]: Premarket → watching for trigger."
             logging.info(status)
             if cb:
                 cb(status, "orange")
-
-            self.order_queue.set_app(general_app)
-            self.order_queue.queue_order(order)
-            return {}
-
-        # --- EXECUTION ---
-        if not trigger_price or order.is_triggered(current_price):
+        
+        # If trigger already met and RTH, fire immediately
+        if not is_premarket and (not trigger_price or order.is_triggered(current_price)):
             attempt = 0
             while True:
                 attempt += 1
@@ -745,11 +743,11 @@ class AppModel:
                 result=f"IB Order ID: {getattr(order, '_ib_order_id', 'Unknown')}"
             )
             logging.info(f"AppModel[{self._symbol}] ACTIVE {order.order_id}")
-
         else:
+            # Always add to watch service (premarket or RTH with pending trigger)
             general_app.add_order(order)
             logging.info(
-                f"AppModel[{self._symbol}] Waiting breakout {order.order_id}"
+                f"AppModel[{self._symbol}] Watching for trigger {order.order_id} (premarket={is_premarket})"
             )
 
         self._order = order
