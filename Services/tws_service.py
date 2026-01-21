@@ -220,6 +220,29 @@ class TWSService(EWrapper, EClient):
             f"[TWSService] orderStatus update {custom_uuid}: "
             f"status={status_str} qty={pos['qty']} avg={pos.get('avg_price')}"
         )
+        
+        # ✅ FIX: When order is Filled, set fill event and mark as finalized
+        if status_str == "filled":
+            order = self._pending_orders.get(custom_uuid)
+            if order:
+                # Set fill event so order_wait_service can proceed
+                if hasattr(order, "_fill_event"):
+                    order._fill_event.set()
+                    logging.info(f"[TWSService] Set fill event for order {custom_uuid}")
+                
+                # Mark order as finalized
+                from Helpers.Order import OrderState
+                if order.state != OrderState.FINALIZED:
+                    result = f"IB Order ID: {orderId}, Filled: {filled}, Avg Price: {avgFillPrice}"
+                    order.mark_finalized(result)
+                    logging.info(f"[TWSService] Marked order {custom_uuid} as FINALIZED")
+                    
+                    # ✅ Also add to finalized_orders immediately so TP buttons work right away
+                    from Services.order_manager import order_manager
+                    order_manager.add_finalized_order(custom_uuid, order)
+                    logging.info(f"[TWSService] Added order {custom_uuid} to finalized_orders")
+            else:
+                logging.warning(f"[TWSService] Order {custom_uuid} not found in _pending_orders when filled")
 
     def openOrder(self, orderId, contract, order: IBOrder, orderState):
         logging.info(f"Order opened - ID: {orderId}, Symbol: {contract.symbol}")

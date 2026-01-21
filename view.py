@@ -272,7 +272,7 @@ class OrderFrame(tk.Frame):
 
         self.btn_fo.pack(side=tk.LEFT,padx=3)
         self.tp_buttons = []
-        for pct in (20, 30, 40):
+        for pct in (10, 20, 50):
             btn = ttk.Button(self.frame_actions, text=f"TP {pct}%",
                             command=lambda p=pct: self._on_take_profit(p))
             btn.pack(side="left", padx=3)
