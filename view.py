@@ -359,9 +359,16 @@ class OrderFrame(tk.Frame):
                 # ✅ Get actual strikes from option chain (blocking call)
                 available_strikes = self.model.get_available_strikes(maturity)
                 
+                # Filter out invalid strikes (None, empty, non-numeric, or <= 0)
+                if available_strikes:
+                    available_strikes = [
+                        s for s in available_strikes 
+                        if s is not None and isinstance(s, (int, float)) and s > 0
+                    ]
+                
                 def apply():
                     if not available_strikes:
-                        # Chain not loaded yet
+                        # Chain not loaded yet or no valid strikes
                         self.combo_strike["values"] = []
                         self.combo_strike.config(state="disabled")
                         return
@@ -680,7 +687,12 @@ class OrderFrame(tk.Frame):
 
         def worker():
             try:
-                strike = float(self.combo_strike.get())
+                # Validate strike is selected
+                strike_str = self.combo_strike.get().strip()
+                if not strike_str:
+                    raise ValueError("Please select a strike price")
+                
+                strike = float(strike_str)
 
                 # ⚠️ STOP LOSS WARNING POPUP (blocking)
                 if sl is None:
