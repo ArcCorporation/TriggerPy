@@ -632,25 +632,15 @@ class OrderWaitService:
                 )
                 
                 if new_trigger and new_trigger > 0:
-                    # Compute ATM strike from trigger
-                    step = 2.5
-                    if order.right in ("C", "CALL"):
-                        new_strike = int(new_trigger / step) * step + step
-                    else:
-                        new_strike = int(new_trigger / step) * step
-                    new_strike = round(new_strike, 2)
-                    
-                    # Update model
-                    model._strike = new_strike
-                    
+                    # Keep original strike - only update trigger
                     # Update order
                     old_trigger = order.trigger
                     order.trigger = new_trigger
-                    order.strike = new_strike
+                    # Strike stays as original - don't recalculate
                     
                     logging.info(
                         f"[WaitService] Auto-rebased premarket trigger | order_id={order_id} | "
-                        f"old_trigger={old_trigger} | new_trigger={new_trigger} | new_strike={new_strike}"
+                        f"old_trigger={old_trigger} | new_trigger={new_trigger} | strike={order.strike} (unchanged)"
                     )
                     if cb:
                         cb(

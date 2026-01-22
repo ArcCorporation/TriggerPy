@@ -17,6 +17,9 @@ class Banner(tk.Canvas):
         super().__init__(parent, height=60, bg="black", highlightthickness=0, **kwargs)
         self.create_text(20, 30, anchor="w", text="ARCTRIGGER",
                          font=("Arial Black", 24, "bold"), fill="#A020F0")
+        # Version number
+        self.create_text(220, 30, anchor="w", text="MV 1.0",
+                         font=("Arial", 12, "bold"), fill="#00FF00")
 
         self.connection_status = self.create_text(
             400, 30, anchor="w", text="🔴 DISCONNECTED", font=("Arial", 10), fill="red"
@@ -187,11 +190,6 @@ class OrderFrame(tk.Frame):
         ttk.Radiobutton(self, text="Put", variable=self.var_type, value="PUT").grid(row=1, column=3)
         # When CALL/PUT changes, repopulate strikes AND update model right
         self.var_type.trace_add("write", self._on_type_changed)
-        self.var_use_25 = tk.BooleanVar(value=True)   # default ON
-        chk_25 = ttk.Checkbutton(self, text="Use 2.5-step",
-                                variable=self.var_use_25,
-                                command=self._on_type_changed)
-        chk_25.grid(row=1, column=4, padx=6, sticky="w") # Shifting column 4 to new column 8 to avoid conflict
 
         # --- THIS IS THE FIX (Step 4 - Checkbox method) ---
         ttk.Label(self, text="Type").grid(row=1, column=8)

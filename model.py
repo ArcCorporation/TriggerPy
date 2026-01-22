@@ -304,7 +304,7 @@ class AppModel:
         self.order_queue = order_queue
 
     def cancel_queued(self):
-        self.order_queue.cancel_queued_actions_for_model(self)
+        self.order_queue.cancel_queued_orders_for_model(self)
 
     # ------------------------------------------------------------------
     def set_status_callback(self, fn):
@@ -403,14 +403,8 @@ class AppModel:
         if not new_trigger or new_trigger <= 0:
             return None
 
-        # 2. Compute ATM strike from trigger
-        step = 2.5  # model-level decision; UI can override visually
-        if self._right == "C":
-            new_strike = int(new_trigger / step) * step + step
-        else:
-            new_strike = int(new_trigger / step) * step
-
-        self._strike = round(new_strike, 2)
+        # 2. Keep original strike - don't recalculate from trigger
+        # Strike stays as originally set
 
         # 3. Rebase queued action
         success = order_queue.rebase_queued_premarket_order(
