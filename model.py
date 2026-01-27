@@ -304,7 +304,7 @@ class AppModel:
         self.order_queue = order_queue
 
     def cancel_queued(self):
-        self.order_queue.cancel_queued_actions_for_model(self)
+        self.order_queue.cancel_queued_orders_for_model(self)
 
     # ------------------------------------------------------------------
     def set_status_callback(self, fn):
@@ -403,14 +403,8 @@ class AppModel:
         if not new_trigger or new_trigger <= 0:
             return None
 
-        # 2. Compute ATM strike from trigger
-        step = 2.5  # model-level decision; UI can override visually
-        if self._right == "C":
-            new_strike = int(new_trigger / step) * step + step
-        else:
-            new_strike = int(new_trigger / step) * step
-
-        self._strike = round(new_strike, 2)
+        # 2. Keep original strike - don't recalculate from trigger
+        # Strike stays as originally set
 
         # 3. Rebase queued action
         success = order_queue.rebase_queued_premarket_order(
@@ -469,16 +463,26 @@ class AppModel:
             EASTERN = pytz.timezone("US/Eastern")
             now_et = datetime.now(EASTERN).time()
             if dtime(4, 0) <= now_et < dtime(9, 30):
-             
+                # ✅ Allow expiry alignment in premarket
                 aligned = align_expiry_to_friday(expiry)
                 if aligned in maturities['expirations']:
                     logging.warning(f"[{self._symbol}] Premarket expiry {expiry} auto-aligned → {aligned}")
                     self._expiry = aligned
-                    return True
+                    # ✅ BUT STILL VALIDATE STRIKE EXISTS - no bypass for invalid strikes!
+                    if strike in maturities['strikes']:
+                        return True
+                    else:
+                        logging.error(f"[{self._symbol}] Premarket: Strike {strike} not in chain (even after expiry alignment)")
+                        return False
                 else:
-                    # still allow — chain not yet refreshed
-                    logging.warning(f"[{self._symbol}] Premarket validation bypass for {expiry} (TWS chain not refreshed)")
-                    return True
+                    # ✅ Only bypass if chain data is truly unavailable (empty strikes list)
+                    if not maturities.get('strikes') or len(maturities.get('strikes', [])) == 0:
+                        logging.warning(f"[{self._symbol}] Premarket: Chain not yet loaded (no strikes available) - allowing for now")
+                        return True
+                    else:
+                        # Chain is loaded but strike/expiry not found - reject it
+                        logging.error(f"[{self._symbol}] Premarket: Expiry {expiry} and/or strike {strike} not in chain (chain is loaded)")
+                        return False
 
             logging.error(f"[{self._symbol}] Contract invalid → expiry {expiry} or strike {strike} not in chain")
             return False
@@ -709,19 +713,17 @@ class AppModel:
             except Exception as e:
                 logging.error(f"Failed to attach status callback: {e}")
 
-        # --- PREMARKET QUEUE ---
-        if is_market_closed_or_pre_market():
-            status = f"AppModel[{self._symbol}]: Premarket → queued for RTH."
+        # --- ALWAYS START WATCHING (even in premarket) ---
+        # Don't queue in premarket - start watching immediately
+        is_premarket = is_market_closed_or_pre_market()
+        if is_premarket:
+            status = f"AppModel[{self._symbol}]: Premarket → watching for trigger."
             logging.info(status)
             if cb:
                 cb(status, "orange")
-
-            self.order_queue.set_app(general_app)
-            self.order_queue.queue_order(order)
-            return {}
-
-        # --- EXECUTION ---
-        if not trigger_price or order.is_triggered(current_price):
+        
+        # If trigger already met and RTH, fire immediately
+        if not is_premarket and (not trigger_price or order.is_triggered(current_price)):
             attempt = 0
             while True:
                 attempt += 1
@@ -745,11 +747,11 @@ class AppModel:
                 result=f"IB Order ID: {getattr(order, '_ib_order_id', 'Unknown')}"
             )
             logging.info(f"AppModel[{self._symbol}] ACTIVE {order.order_id}")
-
         else:
+            # Always add to watch service (premarket or RTH with pending trigger)
             general_app.add_order(order)
             logging.info(
-                f"AppModel[{self._symbol}] Waiting breakout {order.order_id}"
+                f"AppModel[{self._symbol}] Watching for trigger {order.order_id} (premarket={is_premarket})"
             )
 
         self._order = order
@@ -809,9 +811,10 @@ class AppModel:
 
     def cancel_pending_order(self, order_id: str) -> bool:
         order = self._order
-        if order.order_id == order_id and order.state == OrderState.PENDING:
+        if order and order.order_id == order_id:  # Check if order exists
             general_app.cancel_order(order_id)
             order.mark_cancelled()
+            self._order = None  # Clear the reference so you can place new order
             logging.info(f"AppModel[{self._symbol}]: Order cancelled {order_id}")
             return True
         return False

@@ -5,23 +5,37 @@ import threading
 import time
 import websocket
 import datetime
+import os
 from datetime import time as datetime_time  # Import 'time' with an alias
 from typing import Optional, Dict
-from Services.enigma3 import Enigma3Service
-from Services.randomness import KEY
 # Import the new callback manager
 from Services.callback_manager import callback_manager, ThreadedCallbackService 
 # --- CORRECTED IMPORT ---
 # Use the constants from your provided library
 from Services.nasdaq_info import EASTERN, MARKET_OPEN
 
+# Try to load dotenv if available (optional dependency)
+try:
+    from dotenv import load_dotenv
+    # Load .env file, don't override existing env vars, don't resolve variables
+    load_dotenv(override=False, interpolate=False)
+except ImportError:
+    # dotenv not installed, will use system environment variables
+    pass
+except Exception as e:
+    # If dotenv fails for any reason, log and continue (will use system env vars)
+    logging.warning(f"[PolygonService] Failed to load .env file: {e}. Using system environment variables.")
+
 
 class PolygonService:
     def __init__(self):
-        # Şifreli API key çözülüyor
-        api_key_enc = "SBb(2-n>X0)nJZ6}+[M3b)A>KV%fY}>K"
-        eservis = Enigma3Service()
-        self.api_key = eservis.decrypt(KEY, api_key_enc)
+        # ✅ SECURITY FIX: Get API key from environment variable
+        self.api_key = os.getenv("POLYGON_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "POLYGON_API_KEY environment variable not set! "
+                "Please create a .env file with: POLYGON_API_KEY=your_key_here"
+            )
 
         self.base_url = "https://api.polygon.io"
         self.ws_url = "wss://socket.polygon.io/stocks"

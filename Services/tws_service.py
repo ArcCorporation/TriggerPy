@@ -9,8 +9,7 @@ import random
 from typing import List, Dict, Optional
 from Helpers.Order import Order
 import traceback
-from Services.polygon_service import polygon_service
-from Services.nasdaq_info import is_market_closed_or_pre_market # <-- NEW IMPORT
+from Services.nasdaq_info import is_market_closed_or_pre_market
 from Services.persistent_conid_storage import storage
 import time, threading
 ORDER_LOCK = threading.Lock()   # <-- only one order can pass at a time
@@ -220,6 +219,29 @@ class TWSService(EWrapper, EClient):
             f"[TWSService] orderStatus update {custom_uuid}: "
             f"status={status_str} qty={pos['qty']} avg={pos.get('avg_price')}"
         )
+        
+        # ✅ FIX: When order is Filled, set fill event and mark as finalized
+        if status_str == "filled":
+            order = self._pending_orders.get(custom_uuid)
+            if order:
+                # Set fill event so order_wait_service can proceed
+                if hasattr(order, "_fill_event"):
+                    order._fill_event.set()
+                    logging.info(f"[TWSService] Set fill event for order {custom_uuid}")
+                
+                # Mark order as finalized
+                from Helpers.Order import OrderState
+                if order.state != OrderState.FINALIZED:
+                    result = f"IB Order ID: {orderId}, Filled: {filled}, Avg Price: {avgFillPrice}"
+                    order.mark_finalized(result)
+                    logging.info(f"[TWSService] Marked order {custom_uuid} as FINALIZED")
+                    
+                    # ✅ Also add to finalized_orders immediately so TP buttons work right away
+                    from Services.order_manager import order_manager
+                    order_manager.add_finalized_order(custom_uuid, order)
+                    logging.info(f"[TWSService] Added order {custom_uuid} to finalized_orders")
+            else:
+                logging.warning(f"[TWSService] Order {custom_uuid} not found in _pending_orders when filled")
 
     def openOrder(self, orderId, contract, order: IBOrder, orderState):
         logging.info(f"Order opened - ID: {orderId}, Symbol: {contract.symbol}")
@@ -430,12 +452,18 @@ class TWSService(EWrapper, EClient):
 
     def resolve_conid(self, contract: Contract, timeout: int = 10) -> Optional[int]:
         """Resolve contract to conId"""
-        logging.info(f"[TWSService] resolve_conid() – contract={contract.symbol}")
+        logging.info(f"[TWSService] resolve_conid() – contract={contract.symbol} secType={getattr(contract, 'secType', '?')}")
         
-        conid = storage.get_conid(contract.symbol) 
-        if conid != None:
-            logging.info(f"[TWSService] using stored conid at resolve_conid({contract.symbol})")
-            return int(conid)
+        # ✅ FIX: Only use cached conId for STOCK contracts
+        # OPTION contracts have different conIds - must resolve fresh
+        # The cache (work_symbols) only stores underlying STOCK conIds
+        if contract.secType == "STK":
+            conid = storage.get_conid(contract.symbol) 
+            if conid != None:
+                logging.info(f"[TWSService] using stored STOCK conid at resolve_conid({contract.symbol})")
+                return int(conid)
+        
+        # For OPTION contracts or if no cache, resolve fresh
         if not self.is_connected():
             return None
 
@@ -988,48 +1016,22 @@ class TWSService(EWrapper, EClient):
     def get_option_premium(self, symbol: str, expiry: str, strike: float, right: str, timeout: int = 3) -> Optional[float]:
         """
         Live premium for a *single* option contract.
-        Prioritizes Polygon data if the market is closed/pre-market.
+        Uses ONLY IBKR TWS - no Polygon fallbacks.
+        Returns None if TWS is unavailable or market is closed/pre-market.
         """
         logging.info(f"[TWSService] get_option_premium – {symbol} {expiry} {strike}{right}")
-        # --- 💡 MODIFIED PRE-MARKET BLOCK 💡 ---
-        # If market is closed/pre-market, ONLY use Polygon.
-        # Do not fall through to TWS logic if Polygon fails.
-        if is_market_closed_or_pre_market(): #
-            logging.warning("[TWSService] Market closed/pre-market; prioritizing Polygon for premium.")
-            try:
-                snap = polygon_service.get_option_snapshot(symbol, expiry, strike, right) #
-                if snap and snap.get("mid"):
-                    logging.info(f"[TWSService] Polygon premium (Outside RTH) {snap['mid']}")
-                    return snap["mid"] # <-- Return on success
-                else:
-                    logging.error(f"[TWSService] Polygon (Outside RTH) failed to find premium for {symbol}.")
-                    return None # <-- 💡 MUST return None on failure
-            except Exception as e:
-                logging.error(f"[TWSService] Polygon primary lookup failed: {e}")
-                return None # <-- 💡 MUST return None on exception
-        # --- END MODIFIED BLOCK ---
-
-        # --- Regular Trading Hours or Polygon Failed: Try IBKR First ---
+        
+        # --- Only use IBKR TWS ---
         if not self.is_connected():
-            logging.warning("[TWSService] Not connected to TWS; falling back to Polygon.")
-            try:
-                # This part now serves as a final fallback if the initial check failed
-                snap = polygon_service.get_option_snapshot(symbol, expiry, strike, right)
-                if snap and snap.get("mid"):
-                    logging.info(f"[TWSService] Polygon fallback premium {snap['mid']}")
-                    return snap["mid"]
-                return None
-            except Exception as e:
-                logging.error(f"[TWSService] Polygon fallback failed: {e}")
-                return None
+            logging.warning("[TWSService] Not connected to TWS; cannot fetch option premium.")
+            return None
 
-        # --- IBKR Request Logic (Only runs if connected and during RTH or Polygon failed) ---
+        # --- IBKR Request Logic ---
         contract = self.create_option_contract(symbol, expiry, strike, right)
         conid = self.resolve_conid(contract)
         if not conid:
-            logging.warning(f"[TWSService] Failed to resolve conId for {symbol}, trying Polygon fallback.")
-            snap = polygon_service.get_option_snapshot(symbol, expiry, strike, right)
-            return snap["mid"] if snap else None
+            logging.error(f"[TWSService] Failed to resolve conId for {symbol} {expiry} {strike}{right}")
+            return None
 
         contract.conId = conid
         req_id = self._get_next_req_id()
@@ -1059,15 +1061,8 @@ class TWSService(EWrapper, EClient):
                 logging.info(f"[TWSService] Premium snapshot for {symbol} {expiry} {strike}{right}: bid={bid}, ask={ask}, mid={mid}")
                 return mid
 
-            # --- Fallback to Polygon if TWS failed/timed out ---
-            logging.warning(f"[TWSService] No IBKR premium for {symbol} {expiry} {strike}{right}, fetching from Polygon...")
-            snap = polygon_service.get_option_snapshot(symbol, expiry, strike, right)
-            if snap and snap.get("mid"):
-                logging.info(f"[TWSService] Polygon final fallback premium {snap['mid']}")
-                return snap["mid"]
-            elif snap and snap.get("last"):
-                logging.info(f"[TWSService] Polygon last-trade fallback {symbol}: {snap['last']}")
-                return snap["last"]
+            # --- No fallback - return None if TWS fails ---
+            logging.warning(f"[TWSService] No IBKR premium for {symbol} {expiry} {strike}{right}")
             return None
         finally:
             try:

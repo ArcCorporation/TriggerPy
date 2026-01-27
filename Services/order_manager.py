@@ -153,7 +153,9 @@ class OrderManager:
 
     def take_profit(self, order_id: str,  sell_pct: float) -> Optional[str]:
         """
-        Sell a portion (sell_pct) of the contracts using a Market Order to capture profit.
+        Sell a portion (sell_pct) of the ORIGINAL contracts using a Market Order.
+        TP 50% = close 50% of original quantity.
+        After partial sells, stop loss/breakeven work with remaining quantity.
         """
         base = self.finalized_orders.get(order_id)
         if not base or base.action != "BUY":
@@ -165,12 +167,19 @@ class OrderManager:
             logging.warning(f"[OrderManager] take_profit: position already closed for {order_id}")
             return None
         
-        # Calculate quantity based on *live* position quantity
-        live_qty = pos["qty"]
-        sell_qty = max(1, int(live_qty * sell_pct))
+        # ✅ FIX: Calculate based on ORIGINAL quantity for percentage
+        original_qty = base.qty  # Original quantity when order was placed
+        live_qty = pos["qty"]    # Current remaining quantity
+        
+        # Calculate sell quantity as percentage of original
+        sell_qty = max(1, int(original_qty * sell_pct))
+        
+        # But don't sell more than currently available
+        sell_qty = min(sell_qty, live_qty)
 
         logging.info(f"[OrderManager] TAKE PROFIT triggered for {order_id}: "
-                    f"Selling {sell_qty} contracts (MKT Exit).")
+                    f"Original qty={original_qty}, Live qty={live_qty}, "
+                    f"Selling {sell_qty} contracts ({sell_pct*100:.0f}% of original, {sell_qty/live_qty*100:.0f}% of remaining)")
         
         # Create a MKT exit order
         exit_order = self._create_exit_order(base, sell_qty)
